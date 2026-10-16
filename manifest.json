@@ -1,0 +1,15 @@
+{
+  "name": "더원 PDS 플래너",
+  "short_name": "PDS 플래너",
+  "description": "Plan · Do · See 하루 관리 — 습관코치 더원",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

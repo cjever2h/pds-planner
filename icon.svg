@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="110" fill="#0f172a"/>
+  <circle cx="256" cy="256" r="170" fill="none" stroke="#334155" stroke-width="34"/>
+  <path d="M256 86 A170 170 0 0 1 403 341" fill="none" stroke="#818cf8" stroke-width="34" stroke-linecap="round"/>
+  <path d="M403 341 A170 170 0 0 1 109 341" fill="none" stroke="#f97316" stroke-width="34" stroke-linecap="round"/>
+  <path d="M109 341 A170 170 0 0 1 256 86" fill="none" stroke="#10b981" stroke-width="34" stroke-linecap="round"/>
+  <text x="256" y="292" text-anchor="middle" font-family="Arial, sans-serif" font-weight="800" font-size="110" fill="#fff">PDS</text>
+</svg>
