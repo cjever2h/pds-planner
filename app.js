@@ -29,7 +29,7 @@ function toast(msg, ms = 2200) {
 
 /* ================= state ================= */
 const S = {
-  user: null, profile: null, tab: 'do', seeView: 'day',
+  user: null, profile: null, tab: 'home', seeView: 'day', home: null,
   date: today(), day: null, prev: null, week: null, nextWeek: null,
   runs: [], race: null, range: [], saving: false,
 };
@@ -124,6 +124,7 @@ const scoreColor = p => p == null ? 'var(--empty)' : p >= 0.8 ? '#16a34a' : p >=
 /* ================= load ================= */
 async function loadDate(date) {
   await flush();
+  if (S.home && S.day) S.home.map[S.date] = S.day;
   S.date = date;
   const ws = weekStart(date);
   const [day, prev, week, nextWeek, runs] = await Promise.all([
@@ -160,10 +161,10 @@ function render() {
     </div>
   </header>
   ${phaseBanner()}
-  <main id="view">${S.tab === 'plan' ? planView() : S.tab === 'do' ? doView() : S.tab === 'see' ? seeView() : settingsView()}</main>
+  <main id="view" class="${S.tab === 'home' ? 'wide' : ''}">${S.tab === 'home' ? homeView() : S.tab === 'plan' ? planView() : S.tab === 'do' ? doView() : S.tab === 'see' ? seeView() : settingsView()}</main>
   <div class="savestate" id="savestate"></div>
   <nav class="tabs">
-    ${[['plan', 'P', '계획'], ['do', 'D', '실행'], ['see', 'S', '리뷰'], ['set', '⚙', '설정']].map(([k, i, l]) =>
+    ${[['home', '⌂', '홈'], ['plan', 'P', '계획'], ['do', 'D', '실행'], ['see', 'S', '리뷰'], ['set', '⚙', '설정']].map(([k, i, l]) =>
       `<button data-act="tab" data-tab="${k}" class="${S.tab === k ? 'on' : ''}"><b>${i}</b><span>${l}</span></button>`).join('')}
   </nav>
   ${focusOverlay()}`;
@@ -178,6 +179,208 @@ function phaseBanner() {
   if (m >= rv - 10 && !reviewed) return `<div class="banner see" data-act="tab" data-tab="see">🌙 리뷰 시간이에요 — 하루 리뷰(See) 10분 하기 ›</div>`;
   if (m < toMin('08:20') && !(S.day.top3 || []).some(t => t.text.trim())) return `<div class="banner plan" data-act="tab" data-tab="plan">☀️ 오늘의 핵심 3을 먼저 정해요 (Plan) ›</div>`;
   return '';
+}
+
+/* ================= HOME (대시보드) ================= */
+const PH = { plan: { k: 'P', l: '계획' }, do: { k: 'D', l: '실행' }, see: { k: 'S', l: '리뷰' } };
+const phaseOpts = sel => Object.entries(PH).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v.k} ${v.l}</option>`).join('');
+const sum = a => a.reduce((x, y) => x + (Number(y) || 0), 0);
+
+function monthBounds(date) {
+  const first = date.slice(0, 8) + '01';
+  const d = parse(first); d.setMonth(d.getMonth() + 1); d.setDate(0);
+  return { first, last: ymd(d) };
+}
+/** 달력 칸: 점수 색 + 런닝/리뷰 표시 */
+function calCells(first, last, map, runs, act) {
+  const start = parse(first).getDay(); const lastD = parse(last).getDate();
+  const cells = []; const vals = [];
+  for (let i = 0; i < (start + 6) % 7; i++) cells.push('<div></div>');
+  for (let i = 1; i <= lastD; i++) {
+    const dt = first.slice(0, 8) + pad(i);
+    const sc = score(map[dt], dt); if (sc?.total != null) vals.push(sc.total);
+    const run = runs.find(r => r.date === dt && r.status === 'done');
+    const planned = !run && runs.find(r => r.date === dt && r.status === 'planned' && !/휴식|rest/i.test(r.type + r.title));
+    cells.push(`<button class="mday ${dt === S.date ? 'sel' : ''} ${dt === today() ? 'today' : ''}" data-act="${act}" data-d="${dt}" style="background:${scoreColor(sc?.total)}" title="${dt}${sc?.total != null ? ' PDS ' + Math.round(sc.total * 100) : ''}">
+      <span>${i}</span>${sc?.total != null ? `<b>${Math.round(sc.total * 100)}</b>` : ''}${run ? '<i>🏃</i>' : planned ? '<i class="pl">·</i>' : ''}${map[dt]?.review?.at ? '<i class="rv">✍</i>' : ''}</button>`);
+  }
+  return { cells, vals };
+}
+function homeKey() { const { first, last } = monthBounds(S.date); const ws = weekStart(S.date); return [first, last, ws].join('|'); }
+async function loadHome() {
+  const key = homeKey();
+  if (S.homeLoading === key) return;
+  S.homeLoading = key;
+  const { first, last } = monthBounds(S.date);
+  const ws = weekStart(S.date); const we = addDays(ws, 6);
+  const from = ws < first ? ws : first; const to = we > last ? we : last;
+  try {
+    const [rows, runs] = await Promise.all([db.listDays(from, to), db.runningFor(from, to)]);
+    S.home = { key, map: Object.fromEntries(rows.map(r => [r.date, r.data])), runs };
+  } catch { S.home = { key, map: {}, runs: [] }; }
+  S.homeLoading = null;
+  if (S.tab === 'home') render();
+}
+
+function homeView() {
+  if (S.home?.key !== homeKey()) { loadHome(); }
+  const H = S.home?.key === homeKey() ? S.home : { map: {}, runs: [], loading: true };
+  const map = { ...H.map, [S.date]: S.day };
+  const d = S.day; const sc = score(d, S.date);
+  const ws = weekStart(S.date); const days = [...Array(7)].map((_, i) => addDays(ws, i));
+  const { first, last } = monthBounds(S.date);
+  const { cells, vals } = calCells(first, last, map, H.runs, 'pick');
+  const monthAvg = vals.length ? sum(vals) / vals.length : null;
+  const isToday = S.date === today();
+  const cur = isToday ? currentBlocks().cur : null;
+  const items = cavemanItems(S.date); const caveY = items.filter(c => d.caveman[c.no] === true).length;
+  return `
+  <section class="summary">
+    <div class="sumhead"><h2>${isToday ? '오늘' : fmtDate(S.date)} 한눈에 보기</h2>
+      ${cur ? `<span class="nowpill" style="--c:${AREAS[cur.area]?.color}">지금 · ${esc(cur.title)} ~${cur.end}</span>` : ''}</div>
+    <div class="kpis">
+      <div><b style="color:${scoreColor(sc?.total)}">${sc?.total != null ? Math.round(sc.total * 100) : '–'}</b><span>PDS 점수</span></div>
+      <div><b>${pct(sc?.blocks?.p)}</b><span>블록 실행</span></div>
+      <div><b>${caveY}/${items.length}</b><span>원시인 버튼</span></div>
+      <div><b>${sc?.top3 ? `${sc.top3.v}/${sc.top3.n}` : '–'}</b><span>핵심 3</span></div>
+      <div><b>${d.review?.at ? '✓' : '–'}</b><span>하루 리뷰</span></div>
+    </div>
+    ${d.intention ? `<p class="intent">🎯 ${esc(d.intention)}</p>` : ''}
+  </section>
+
+  <div class="dash">
+    <section class="card calcard">
+      <div class="calhead">
+        <button class="icon" data-act="monthnav" data-n="-1" aria-label="이전 달">‹</button>
+        <h3>📅 ${parse(first).getFullYear()}년 ${parse(first).getMonth() + 1}월</h3>
+        <button class="icon" data-act="monthnav" data-n="1" aria-label="다음 달">›</button>
+      </div>
+      <div class="mgrid head">${['월', '화', '수', '목', '금', '토', '일'].map(x => `<div>${x}</div>`).join('')}</div>
+      <div class="mgrid">${cells.join('')}</div>
+      <p class="muted small">${H.loading ? '불러오는 중… · ' : ''}월 평균 PDS ${pct(monthAvg)} · 🏃 런닝 완료 · ✍ 리뷰 · 날짜를 누르면 그날 현황</p>
+    </section>
+    <div class="areas">
+      ${runArea(H, days)}${readArea()}${snsArea(map, days)}${bizArea(map, days)}
+    </div>
+  </div>
+
+  ${pdsBoard()}`;
+}
+
+function runArea(H, days) {
+  const wk = (H.loading ? S.runs : H.runs).filter(r => r.date >= days[0] && r.date <= days[6]);
+  const train = wk.filter(r => !/휴식|rest/i.test(r.type + r.title));
+  const done = train.filter(r => r.status === 'done');
+  const km = sum(done.map(r => r.actual_distance ?? r.planned_distance));
+  const planKm = sum(train.map(r => r.planned_distance));
+  const td = wk.filter(r => r.date === S.date);
+  const dd = S.race ? Math.round((parse(S.race.date) - parse(today())) / 864e5) : null;
+  const block = S.day.blocks.find(b => b.area === 'run');
+  return `<section class="card area" style="--c:${AREAS.run.color}">
+    <div class="ahead"><h3>🏃 런닝</h3>${S.race && dd >= 0 ? `<span class="dday">D-${dd}</span>` : ''}</div>
+    <div class="abig">${td.length ? td.map(r => `${esc(r.title)}${r.planned_distance ? ` <small>${r.planned_distance}km</small>` : ''} <span class="pill ${r.status}">${r.status === 'done' ? '완료' : r.status === 'skipped' ? '건너뜀' : '예정'}</span>`).join('<br>') : `<span class="muted">${block ? esc(block.title) + ' (루틴)' : '훈련 없음'}</span>`}</div>
+    <div class="aline"><span>이번 주</span><b>${done.length}/${train.length}회</b><span>${km ? km.toFixed(1) : 0}${planKm ? '/' + planKm.toFixed(0) : ''}km</span></div>
+    <div class="bar sm"><i style="width:${planKm ? Math.min(100, km / planKm * 100) : 0}%"></i></div>
+    ${S.race ? `<p class="muted small">${esc(S.race.name)} · 목표 ${esc(S.race.goal)}</p>` : ''}
+    <a class="linkbtn small" href="${esc(S.profile.links.runningApp)}" target="_blank" rel="noopener">런닝 캘린더 ↗</a>
+  </section>`;
+}
+function readArea() {
+  const p = S.profile; const d = S.day;
+  const monthBooks = p.books.filter(b => b.date?.slice(0, 7) === S.date.slice(0, 7)).length;
+  const readCnt = p.tracks.filter(t => d.reading[t.id]).length;
+  return `<section class="card area" style="--c:${AREAS.read.color}">
+    <div class="ahead"><h3>📚 독서</h3><span class="muted small">오늘 ${readCnt}/4 트랙</span></div>
+    <div class="aline"><span>이번 달 완독</span><b>${monthBooks}/${p.monthlyBooks}권</b></div>
+    <div class="bar sm"><i style="width:${Math.min(100, monthBooks / (p.monthlyBooks || 1) * 100)}%"></i></div>
+    <ul class="mini">${p.tracks.map(t => {
+      const pr = t.total ? Math.min(1, (t.page || 0) / t.total) : 0;
+      return `<li><span class="chk ${d.reading[t.id] ? 'on' : ''}" data-act="readtoggle" data-id="${t.id}" title="오늘 읽음">${d.reading[t.id] ? '✓' : ''}</span>
+        <span class="tn">${esc(t.name)}</span><span class="bk ellipsis">${t.book ? esc(t.book) : '<span class="muted">책 미정</span>'}</span>
+        <span class="pc">${t.total ? Math.round(pr * 100) + '%' : ''}</span></li>`;
+    }).join('')}</ul>
+  </section>`;
+}
+function snsArea(map, days) {
+  const d = S.day; const items = snsItems(S.date);
+  const wk = days.map(dt => score(map[dt], dt)?.sns?.p).filter(v => v != null && v > 0);
+  return `<section class="card area" style="--c:#ec4899">
+    <div class="ahead"><h3>📣 SNS</h3><span class="muted small">주간 평균 ${wk.length ? pct(sum(wk) / wk.length) : '–'}</span></div>
+    ${items.map(s => {
+      const v = Number(d.sns[s.key]) || 0; const p = Math.min(1, v / (s.target || 1));
+      return `<div class="snsmini"><span>${esc(s.label)}</span>
+        <div class="bar sm"><i style="width:${p * 100}%;background:${p >= 1 ? '#16a34a' : '#ec4899'}"></i></div>
+        <b>${s.target === 1 ? (v ? '✓' : '–') : `${v}/${s.target}`}</b>
+        ${s.target === 1 ? `<button class="sm" data-act="snsset" data-k="${s.key}" data-v="${v ? 0 : 1}">${v ? '취소' : '완료'}</button>` : `<button class="sm" data-act="sns" data-k="${s.key}" data-n="1">+1</button>`}</div>`;
+    }).join('')}
+  </section>`;
+}
+function bizArea(map, days) {
+  const d = S.day;
+  const blocks = d.blocks.filter(b => b.area === 'biz');
+  const tasks = [...d.top3.filter(t => t.text.trim() && t.area === 'biz'), ...d.tasks.filter(t => t.area === 'biz')];
+  const focusMin = sum(days.flatMap(dt => (map[dt]?.focus || []).filter(f => f.area === 'biz' || /글쓰기|사업/.test(f.title)).map(f => f.min)));
+  const goal = S.week.goals.biz;
+  const icon = s => s === 'done' ? '✓' : s === 'partial' ? '△' : s === 'skip' ? '✕' : '○';
+  return `<section class="card area" style="--c:${AREAS.biz.color}">
+    <div class="ahead"><h3>💼 온라인사업</h3><span class="muted small">이번 주 집중 ${focusMin}분</span></div>
+    ${blocks.length ? blocks.map(b => `<div class="aline"><span class="st-${b.status || 'none'}">${icon(b.status)}</span><span class="grow">${b.start} ${esc(b.title)}</span></div>`).join('') : '<p class="muted small">오늘 사업 블록 없음</p>'}
+    <div class="aline"><span>사업 할 일</span><b>${tasks.filter(t => t.done).length}/${tasks.length}</b></div>
+    <p class="small">${goal ? `주간 목표: ${esc(goal)} ${S.week.goalsDone?.biz ? '✅' : ''}` : '<span class="muted">주간 사업 목표 없음 (Plan에서 입력)</span>'}</p>
+    <p class="muted small">스레드 · 인스타 · 전자책(AI각인독서법, 미라클모닝 7단계)</p>
+  </section>`;
+}
+
+/** P·D·S 할 일 보드: 자동 항목(앱 상태로 체크) + 직접 추가한 할 일 */
+function pdsBoard() {
+  const d = S.day; const isToday = S.date === today(); const m = nowMin();
+  const t3 = d.top3.filter(t => t.text.trim()).length;
+  const lesson = S.prev?.review?.change?.trim();
+  const goalsN = ['run', 'read', 'biz'].filter(a => S.week.goals[a]?.trim()).length;
+  const noBook = S.profile.tracks.filter(t => !t.book).length;
+  const autoP = [
+    { text: `오늘의 핵심 3 정하기 (${t3}/3)`, done: t3 >= 3, tab: 'plan' },
+    { text: `이번 주 3대 영역 목표 (${goalsN}/3)`, done: goalsN >= 3, tab: 'plan' },
+    lesson && { text: `어제의 Try 반영: ${lesson}`, done: d.tasks.some(t => t.text === lesson), tab: 'plan' },
+    noBook && { text: `독서 트랙 책 정하기 (${4 - noBook}/4)`, done: false, tab: 'plan' },
+  ].filter(Boolean);
+  const pastOpen = d.blocks.filter(b => (!isToday || toMin(b.end) <= m) && !b.status).length;
+  const caveTouched = Object.keys(d.caveman).length > 0;
+  const snsAny = Object.values(d.sns).some(v => Number(v) > 0);
+  const autoS = [
+    { text: pastOpen ? `타임라인 체크 (남은 ${pastOpen}개)` : '타임라인 체크', done: !pastOpen && d.blocks.some(b => b.status), tab: 'do' },
+    { text: '원시인 버튼 스캔', done: caveTouched, tab: 'do' },
+    { text: 'SNS 카운터 입력', done: snsAny, tab: 'do' },
+    { text: `하루 리뷰 (${S.profile.reviewTime})`, done: !!d.review?.at, tab: 'see' },
+    dow(S.date) === 0 && { text: '주간 리뷰 + 다음 주 목표', done: !!(S.week.review?.good || S.week.review?.change), tab: 'see', see: 'week' },
+  ].filter(Boolean);
+  const autoLi = it => `<li class="auto ${it.done ? 'done' : ''}" data-act="gotab" data-tab="${it.tab}" data-see="${it.see || ''}">
+      <span class="chk ${it.done ? 'on' : ''}">${it.done ? '✓' : ''}</span><span class="grow">${esc(it.text)}</span><span class="go">›</span></li>`;
+  const taskLi = (t, i) => `<li class="${t.done ? 'done' : ''}"><label><input type="checkbox" data-act="toggletask" data-i="${i}" ${t.done ? 'checked' : ''} />
+      ${areaDot(t.area)}<span class="grow">${esc(t.text)}</span></label><button class="icon" data-act="deltask" data-i="${i}" title="삭제">✕</button></li>`;
+  const mine = ph => d.tasks.map((t, i) => [t, i]).filter(([t]) => (t.phase || 'do') === ph);
+  const topLi = d.top3.map((t, i) => t.text.trim() ? `<li class="${t.done ? 'done' : ''}"><label><input type="checkbox" data-act="toggletop" data-i="${i}" ${t.done ? 'checked' : ''} />
+      ${areaDot(t.area)}<span class="grow"><b>핵심</b> ${esc(t.text)}</span></label></li>` : '').join('');
+  const runs = S.runs.filter(r => r.date === S.date && !/휴식|rest/i.test(r.type + r.title));
+  const runLi = runs.map(r => `<li class="auto ${r.status === 'done' ? 'done' : ''}" data-act="gotab" data-tab="do"><span class="chk ${r.status === 'done' ? 'on' : ''}">${r.status === 'done' ? '✓' : ''}</span>
+      <span class="grow">🏃 ${esc(r.title)}${r.planned_distance ? ` ${r.planned_distance}km` : ''}</span><span class="go">›</span></li>`).join('');
+  const col = (ph, title, autoHtml, extra = '') => {
+    const mt = mine(ph);
+    const all = [...(ph === 'plan' ? autoP : ph === 'see' ? autoS : []), ...mt.map(([t]) => t)];
+    const doneN = all.filter(x => x.done).length + (ph === 'do' ? d.top3.filter(t => t.text.trim() && t.done).length + runs.filter(r => r.status === 'done').length : 0);
+    const totalN = all.length + (ph === 'do' ? t3 + runs.length : 0);
+    return `<section class="card pcol pc-${ph}">
+      <div class="phead"><b class="ph ph-${ph}">${PH[ph].k}</b><h3>${title}</h3><span class="muted small">${doneN}/${totalN}</span></div>
+      <ul class="todo">${autoHtml}${extra}${mt.map(([t, i]) => taskLi(t, i)).join('')}</ul>
+      ${!totalN ? '<p class="muted small">비어 있어요</p>' : ''}
+      <input class="addph" data-ph="${ph}" placeholder="+ ${PH[ph].l} 할 일 추가 (Enter)" />
+    </section>`;
+  };
+  return `<div class="pdscols">
+    ${col('plan', '계획', autoP.map(autoLi).join(''))}
+    ${col('do', '실행', topLi + runLi)}
+    ${col('see', '리뷰', autoS.map(autoLi).join(''))}
+  </div>`;
 }
 
 /* ================= PLAN ================= */
@@ -233,6 +436,7 @@ function planView() {
     <h3>✅ 할 일</h3>
     ${taskList(true)}
     <div class="row">
+      <select id="newtaskphase" class="areasel">${phaseOpts('do')}</select>
       <select id="newtaskarea" class="areasel">${areaOpts('biz')}</select>
       <input id="newtask" placeholder="할 일 입력 후 Enter" />
       <button data-act="addtask">추가</button>
@@ -259,7 +463,7 @@ function taskList(editable) {
   if (!d.tasks.length) return `<p class="muted">할 일이 없어요.</p>`;
   return `<ul class="tasks">${d.tasks.map((t, i) => `
     <li class="${t.done ? 'done' : ''}">
-      <label><input type="checkbox" data-act="toggletask" data-i="${i}" ${t.done ? 'checked' : ''} /> ${areaDot(t.area)} <span>${esc(t.text)}</span></label>
+      <label><input type="checkbox" data-act="toggletask" data-i="${i}" ${t.done ? 'checked' : ''} /> <i class="ph ph-${t.phase || 'do'}">${PH[t.phase || 'do'].k}</i> ${areaDot(t.area)} <span>${esc(t.text)}</span></label>
       ${editable ? `<span class="taskbtns"><button class="icon" data-act="movetask" data-i="${i}" title="내일로 미루기">→</button><button class="icon" data-act="deltask" data-i="${i}" title="삭제">✕</button></span>` : ''}
     </li>`).join('')}</ul>`;
 }
@@ -525,17 +729,7 @@ function seeWeek(ws, rows) {
 function seeMonth(first, last, rows, runs) {
   const map = Object.fromEntries(rows.map(r => [r.date, r.data]));
   if (S.date >= first && S.date <= last) map[S.date] = S.day;
-  const start = parse(first).getDay(); const lastD = parse(last).getDate();
-  const cells = [];
-  for (let i = 0; i < (start + 6) % 7; i++) cells.push('<div></div>');
-  const vals = [];
-  for (let i = 1; i <= lastD; i++) {
-    const dt = first.slice(0, 8) + pad(i);
-    const sc = score(map[dt], dt); if (sc?.total != null) vals.push(sc.total);
-    const run = runs.find(r => r.date === dt && r.status === 'done');
-    cells.push(`<button class="mday ${dt === S.date ? 'sel' : ''} ${dt === today() ? 'today' : ''}" data-act="goto" data-d="${dt}" style="background:${scoreColor(sc?.total)}">
-      <span>${i}</span>${sc?.total != null ? `<b>${Math.round(sc.total * 100)}</b>` : ''}${run ? '<i>🏃</i>' : ''}${map[dt]?.review?.at ? '<i class="rv">✍</i>' : ''}</button>`);
-  }
+  const { cells, vals } = calCells(first, last, map, runs, 'goto');
   const books = S.profile.books.filter(b => b.date >= first && b.date <= last);
   const reviews = rows.filter(r => r.data?.review?.at).length;
   const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
@@ -676,7 +870,7 @@ async function endFocus(done) {
     if (f.date !== S.date) await loadDate(f.date);
     const b = S.day.blocks.find(x => x.id === f.blockId);
     if (b) b.status = 'done';
-    S.day.focus = [...(S.day.focus || []), { title: f.title, min: f.start ? Math.max(1, Math.round((Math.min(Date.now(), f.end) - f.start) / 60000)) : f.min, at: new Date().toISOString() }];
+    S.day.focus = [...(S.day.focus || []), { title: f.title, area: b?.area, min: f.start ? Math.max(1, Math.round((Math.min(Date.now(), f.end) - f.start) / 60000)) : f.min, at: new Date().toISOString() }];
     markDirty('day');
   }
   render();
@@ -704,7 +898,7 @@ setInterval(() => {
   const m = nowMin(); if (m === lastMinute) return; lastMinute = m;
   const a = document.activeElement;
   const typing = a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName);
-  if (S.date === today() && S.tab === 'do' && !typing && !getFocus()) render();
+  if (S.date === today() && (S.tab === 'do' || S.tab === 'home') && !typing && !getFocus()) render();
   if (m === toMin(S.profile.reviewTime || '21:30') && !S.day?.review?.at) notify('하루 리뷰 시간', '10분 See: 점수 보고 Keep/Problem/Try');
 }, 15000);
 
@@ -734,6 +928,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'newtask') { e.preventDefault(); act('addtask'); }
+  if (e.key === 'Enter' && e.target.dataset?.ph) { e.preventDefault(); act('addtaskph', { ph: e.target.dataset.ph }); }
   if (e.key === 'Enter' && e.target.id === 'bookadd') { e.preventDefault(); act('addbook'); }
   if (e.key === 'Enter' && e.target.closest?.('#loginform')) { e.preventDefault(); act('login'); }
 });
@@ -754,6 +949,14 @@ async function act(a, ds = {}, el) {
       try { $('#datepick').showPicker(); } catch { $('#datepick').hidden = false; }
       break;
     case 'goto': S.seeView = 'day'; await loadDate(ds.d); break;
+    case 'pick': await loadDate(ds.d); break;
+    case 'monthnav': { const x = parse(S.date.slice(0, 8) + '01'); x.setMonth(x.getMonth() + Number(ds.n)); const t = today(); await loadDate(ymd(x).slice(0, 7) === t.slice(0, 7) ? t : ymd(x)); break; }
+    case 'gotab': S.tab = ds.tab; if (ds.see) S.seeView = ds.see; render(); scrollTo(0, 0); break;
+    case 'addtaskph': {
+      const inp = document.querySelector(`.addph[data-ph="${ds.ph}"]`); const t = inp?.value.trim(); if (!t) break;
+      d.tasks.push({ id: uid(), text: t, area: ds.ph === 'do' ? 'biz' : ds.ph === 'see' ? 'review' : 'life', phase: ds.ph, done: false });
+      markDirty('day'); render(); document.querySelector(`.addph[data-ph="${ds.ph}"]`)?.focus(); break;
+    }
     case 'seeview': S.seeView = ds.v; render(); break;
     // plan
     case 'lesson2task': d.tasks.push({ id: uid(), text: S.prev.review.change, area: 'life', done: false }); markDirty('day'); toast('할 일에 추가했어요'); render(); break;
@@ -765,7 +968,7 @@ async function act(a, ds = {}, el) {
       d.blocks = blocksFor(S.date, p.template); markDirty('day'); render(); break;
     case 'addtask': {
       const inp = $('#newtask'); const t = inp?.value.trim(); if (!t) break;
-      d.tasks.push({ id: uid(), text: t, area: $('#newtaskarea')?.value || 'biz', done: false });
+      d.tasks.push({ id: uid(), text: t, area: $('#newtaskarea')?.value || 'biz', phase: $('#newtaskphase')?.value || 'do', done: false });
       markDirty('day'); render(); $('#newtask')?.focus(); break;
     }
     case 'deltask': d.tasks.splice(Number(ds.i), 1); markDirty('day'); render(); break;
@@ -774,7 +977,7 @@ async function act(a, ds = {}, el) {
       const t = d.tasks.splice(Number(ds.i), 1)[0]; markDirty('day'); await flush();
       const nd = addDays(S.date, 1);
       const next = normDay(await db.getDay(nd), nd);
-      next.tasks.push({ ...t, done: false }); await db.saveDay(nd, next);
+      next.tasks.push({ ...t, done: false }); await db.saveDay(nd, next); S.home = null;
       toast('내일로 옮겼어요'); render(); break;
     }
     case 'action2task': { const t = p.tracks[ds.i]; d.tasks.push({ id: uid(), text: `[${t.name}] ${t.action}`, area: 'read', done: false }); markDirty('day'); toast('오늘 할 일에 추가'); render(); break; }
