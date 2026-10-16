@@ -202,6 +202,7 @@ main.wide { max-width: 1180px; }
 .calhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .calhead h3 { margin: 0; }
 .calhead .icon { font-size: 20px; }
+.mday i.rd { top: auto; bottom: 1px; right: 3px; }
 .mday i.pl { font-size: 18px; line-height: 10px; color: #f97316; }
 .areas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .area { border-top: 4px solid var(--c); display: flex; flex-direction: column; gap: 6px; }

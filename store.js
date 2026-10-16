@@ -1,6 +1,6 @@
 // 데이터 저장소: Supabase(클라우드) 또는 localStorage(로컬)
 // 테이블: pds_profile(설정 1행) · pds_days(하루 1행) · pds_weeks(주 1행) — 모두 jsonb 문서
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, READING_URL, READING_KEY } from './config.js';
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 export const isCloud = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
@@ -105,6 +105,38 @@ export async function nextRace(today) {
     if (error || !data?.length) return null;
     return data.find(r => r.priority === 'A') || data[0];
   } catch { return null; }
+}
+
+/* ---------- 독서앱 연동 (별도 프로젝트, 읽기 전용) ---------- */
+let rb = null;
+export const hasReading = Boolean(READING_URL && READING_KEY);
+export function initReading() {
+  if (hasReading) rb = createClient(READING_URL, READING_KEY, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'pds-reading-auth' } });
+}
+export async function readingUser() {
+  if (!rb) return null;
+  const { data } = await rb.auth.getSession();
+  return data.session?.user ?? null;
+}
+export async function readingConnect(email, password) {
+  const { data, error } = await rb.auth.signInWithPassword({ email, password });
+  if (error) throw error; return data.user;
+}
+export async function readingDisconnect() { if (rb) await rb.auth.signOut(); }
+/** from~to(YYYY-MM-DD, 로컬 날짜) 범위의 독서 데이터 */
+export async function readingData(from, to) {
+  if (!rb) return null;
+  const u = await readingUser(); if (!u) return null;
+  const iso = (s, end) => new Date(s + (end ? 'T23:59:59' : 'T00:00:00')).toISOString();
+  const [b, s, a, r] = await Promise.all([
+    rb.from('books').select('id,title,author,cover_url,pages,current_page,status,start_date,finish_date').order('updated_at', { ascending: false }),
+    rb.from('reading_sessions').select('book_id,started_at,seconds,start_page,end_page').gte('started_at', iso(from)).lte('started_at', iso(to, true)),
+    rb.from('action_experiments').select('id,book_id,action,start_date,checks'),
+    rb.from('review_tasks').select('book_id,stage,due_date,done').eq('done', false).lte('due_date', to),
+  ]);
+  const err = b.error || s.error || a.error || r.error;
+  if (err) throw err;
+  return { email: u.email, books: b.data || [], sessions: s.data || [], actions: a.data || [], reviews: r.data || [] };
 }
 
 /* ---------- 백업 ---------- */

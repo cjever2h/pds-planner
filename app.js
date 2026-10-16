@@ -129,7 +129,7 @@ async function loadDate(date) {
   const ws = weekStart(date);
   const [day, prev, week, nextWeek, runs] = await Promise.all([
     db.getDay(date), db.getDay(addDays(date, -1)), db.getWeek(ws), db.getWeek(addDays(ws, 7)),
-    db.runningFor(ws, addDays(ws, 6)),
+    db.runningFor(ws, addDays(ws, 6)), loadReading(date),
   ]);
   S.day = normDay(day, date);
   S.prev = prev;
@@ -202,7 +202,7 @@ function calCells(first, last, map, runs, act) {
     const run = runs.find(r => r.date === dt && r.status === 'done');
     const planned = !run && runs.find(r => r.date === dt && r.status === 'planned' && !/휴식|rest/i.test(r.type + r.title));
     cells.push(`<button class="mday ${dt === S.date ? 'sel' : ''} ${dt === today() ? 'today' : ''}" data-act="${act}" data-d="${dt}" style="background:${scoreColor(sc?.total)}" title="${dt}${sc?.total != null ? ' PDS ' + Math.round(sc.total * 100) : ''}">
-      <span>${i}</span>${sc?.total != null ? `<b>${Math.round(sc.total * 100)}</b>` : ''}${run ? '<i>🏃</i>' : planned ? '<i class="pl">·</i>' : ''}${map[dt]?.review?.at ? '<i class="rv">✍</i>' : ''}</button>`);
+      <span>${i}</span>${sc?.total != null ? `<b>${Math.round(sc.total * 100)}</b>` : ''}${run ? '<i>🏃</i>' : planned ? '<i class="pl">·</i>' : ''}${map[dt]?.review?.at ? '<i class="rv">✍</i>' : ''}${sessionsOn(dt).length ? '<i class="rd">📖</i>' : ''}</button>`);
   }
   return { cells, vals };
 }
@@ -286,19 +286,27 @@ function runArea(H, days) {
   </section>`;
 }
 function readArea() {
-  const p = S.profile; const d = S.day;
-  const monthBooks = p.books.filter(b => b.date?.slice(0, 7) === S.date.slice(0, 7)).length;
-  const readCnt = p.tracks.filter(t => d.reading[t.id]).length;
+  const p = S.profile;
+  const { first, last } = monthBounds(S.date);
+  const monthBooks = doneBooks(first, last).length;
+  const readCnt = p.tracks.filter(t => trackRead(t, S.date)).length;
+  const ws = weekStart(S.date);
+  const todayMin = readMinutes(S.date, S.date); const weekMin = readMinutes(ws, addDays(ws, 6));
+  const linkedIds = new Set(p.tracks.map(t => t.bookId).filter(Boolean));
+  const loose = (S.reading?.books || []).filter(b => b.status === 'reading' && !linkedIds.has(b.id));
   return `<section class="card area" style="--c:${AREAS.read.color}">
-    <div class="ahead"><h3>📚 독서</h3><span class="muted small">오늘 ${readCnt}/4 트랙</span></div>
-    <div class="aline"><span>이번 달 완독</span><b>${monthBooks}/${p.monthlyBooks}권</b></div>
+    <div class="ahead"><h3>📚 독서</h3><span class="muted small">오늘 ${readCnt}/4 트랙${S.reading ? ` · ${todayMin}분` : ''}</span></div>
+    <div class="aline"><span>이번 달 완독</span><b>${monthBooks}/${p.monthlyBooks}권</b>${S.reading ? `<span>주간 ${weekMin}분</span>` : ''}</div>
     <div class="bar sm"><i style="width:${Math.min(100, monthBooks / (p.monthlyBooks || 1) * 100)}%"></i></div>
     <ul class="mini">${p.tracks.map(t => {
-      const pr = t.total ? Math.min(1, (t.page || 0) / t.total) : 0;
-      return `<li><span class="chk ${d.reading[t.id] ? 'on' : ''}" data-act="readtoggle" data-id="${t.id}" title="오늘 읽음">${d.reading[t.id] ? '✓' : ''}</span>
-        <span class="tn">${esc(t.name)}</span><span class="bk ellipsis">${t.book ? esc(t.book) : '<span class="muted">책 미정</span>'}</span>
-        <span class="pc">${t.total ? Math.round(pr * 100) + '%' : ''}</span></li>`;
+      const tb = trackBook(t); const on = trackRead(t, S.date);
+      const pr = tb.total ? Math.min(1, (tb.page || 0) / tb.total) : 0;
+      return `<li><span class="chk ${on ? 'on' : ''}" data-act="readtoggle" data-id="${t.id}" title="오늘 읽음">${on ? '✓' : ''}</span>
+        <span class="tn">${esc(t.name)}</span><span class="bk ellipsis">${tb.title ? esc(tb.title) : '<span class="muted">책 미정</span>'}</span>
+        <span class="pc">${tb.total ? Math.round(pr * 100) + '%' : ''}</span></li>`;
     }).join('')}</ul>
+    ${loose.length ? `<p class="muted small">트랙 미지정: ${loose.map(b => esc(b.title)).join(', ')} · <a href="#" data-act="gotab" data-tab="plan">Plan에서 지정</a></p>` : ''}
+    ${readingStatusLine()}
   </section>`;
 }
 function snsArea(map, days) {
@@ -337,7 +345,10 @@ function pdsBoard() {
   const t3 = d.top3.filter(t => t.text.trim()).length;
   const lesson = S.prev?.review?.change?.trim();
   const goalsN = ['run', 'read', 'biz'].filter(a => S.week.goals[a]?.trim()).length;
-  const noBook = S.profile.tracks.filter(t => !t.book).length;
+  const noBook = S.profile.tracks.filter(t => !trackBook(t).title).length;
+  const acts = activeActions(S.date);
+  const dues = dueReviews(S.date);
+  const rUrl = S.profile.links.readingApp;
   const autoP = [
     { text: `오늘의 핵심 3 정하기 (${t3}/3)`, done: t3 >= 3, tab: 'plan' },
     { text: `이번 주 3대 영역 목표 (${goalsN}/3)`, done: goalsN >= 3, tab: 'plan' },
@@ -353,8 +364,9 @@ function pdsBoard() {
     { text: 'SNS 카운터 입력', done: snsAny, tab: 'do' },
     { text: `하루 리뷰 (${S.profile.reviewTime})`, done: !!d.review?.at, tab: 'see' },
     dow(S.date) === 0 && { text: '주간 리뷰 + 다음 주 목표', done: !!(S.week.review?.good || S.week.review?.change), tab: 'see', see: 'week' },
+    ...dues.map(r => ({ text: `📖 독서 복습 ${r.stage}: ${r.title}${r.due_date < S.date ? ' (밀림)' : ''}`, done: false, url: rUrl })),
   ].filter(Boolean);
-  const autoLi = it => `<li class="auto ${it.done ? 'done' : ''}" data-act="gotab" data-tab="${it.tab}" data-see="${it.see || ''}">
+  const autoLi = it => `<li class="auto ${it.done ? 'done' : ''}" ${it.url ? `data-act="openurl" data-url="${esc(it.url)}"` : `data-act="gotab" data-tab="${it.tab}" data-see="${it.see || ''}"`}>
       <span class="chk ${it.done ? 'on' : ''}">${it.done ? '✓' : ''}</span><span class="grow">${esc(it.text)}</span><span class="go">›</span></li>`;
   const taskLi = (t, i) => `<li class="${t.done ? 'done' : ''}"><label><input type="checkbox" data-act="toggletask" data-i="${i}" ${t.done ? 'checked' : ''} />
       ${areaDot(t.area)}<span class="grow">${esc(t.text)}</span></label><button class="icon" data-act="deltask" data-i="${i}" title="삭제">✕</button></li>`;
@@ -367,8 +379,8 @@ function pdsBoard() {
   const col = (ph, title, autoHtml, extra = '') => {
     const mt = mine(ph);
     const all = [...(ph === 'plan' ? autoP : ph === 'see' ? autoS : []), ...mt.map(([t]) => t)];
-    const doneN = all.filter(x => x.done).length + (ph === 'do' ? d.top3.filter(t => t.text.trim() && t.done).length + runs.filter(r => r.status === 'done').length : 0);
-    const totalN = all.length + (ph === 'do' ? t3 + runs.length : 0);
+    const doneN = all.filter(x => x.done).length + (ph === 'do' ? d.top3.filter(t => t.text.trim() && t.done).length + runs.filter(r => r.status === 'done').length + acts.filter(a => a.done).length : 0);
+    const totalN = all.length + (ph === 'do' ? t3 + runs.length + acts.length : 0);
     return `<section class="card pcol pc-${ph}">
       <div class="phead"><b class="ph ph-${ph}">${PH[ph].k}</b><h3>${title}</h3><span class="muted small">${doneN}/${totalN}</span></div>
       <ul class="todo">${autoHtml}${extra}${mt.map(([t, i]) => taskLi(t, i)).join('')}</ul>
@@ -378,10 +390,64 @@ function pdsBoard() {
   };
   return `<div class="pdscols">
     ${col('plan', '계획', autoP.map(autoLi).join(''))}
-    ${col('do', '실행', topLi + runLi)}
+    ${col('do', '실행', topLi + runLi + acts.map(a => autoLi({ text: `🧪 실행 실험 D${a.day}/30: ${a.action}`, done: a.done, url: rUrl })).join(''))}
     ${col('see', '리뷰', autoS.map(autoLi).join(''))}
   </div>`;
 }
+
+/* ================= 독서앱 연동 ================= */
+async function loadReading(date) {
+  if (!db.hasReading) return;
+  const { first, last } = monthBounds(date);
+  const ws = weekStart(date); const we = addDays(ws, 6);
+  const from = ws < first ? ws : first; const to = we > last ? we : last;
+  try { S.reading = await db.readingData(from, to); S.readingErr = null; }
+  catch (e) { S.reading = null; S.readingErr = e.message || String(e); }
+}
+const rBook = id => S.reading?.books.find(b => b.id === id);
+/** 트랙의 책: 독서앱 책이 연결돼 있으면 그 데이터, 아니면 직접 입력값 */
+function trackBook(t) {
+  const b = t.bookId && rBook(t.bookId);
+  if (b) return { title: b.title, total: b.pages || 0, page: b.current_page || 0, linked: true, b };
+  return { title: t.book, total: t.total || 0, page: t.page || 0, linked: false };
+}
+const sessDate = s => ymd(new Date(s.started_at));
+function sessionsOn(date, bookId) { return (S.reading?.sessions || []).filter(s => sessDate(s) === date && (!bookId || s.book_id === bookId)); }
+function trackRead(t, date) {
+  if (date === S.date && S.day.reading[t.id]) return true;
+  return !!(t.bookId && sessionsOn(date, t.bookId).length);
+}
+function readMinutes(from, to, bookId) {
+  return Math.round((S.reading?.sessions || []).filter(s => { const d = sessDate(s); return d >= from && d <= to && (!bookId || s.book_id === bookId); })
+    .reduce((a, s) => a + (s.seconds || 0), 0) / 60);
+}
+/** 완독: PDS 직접 기록 + 독서앱 status=done (제목 중복 제거) */
+function doneBooks(from, to) {
+  const list = S.profile.books.filter(b => b.date >= from && b.date <= to).map(b => ({ title: b.title, date: b.date, track: b.track }));
+  for (const b of S.reading?.books || []) {
+    if (b.status === 'done' && b.finish_date && b.finish_date >= from && b.finish_date <= to && !list.some(x => x.title === b.title)) {
+      const t = S.profile.tracks.find(x => x.bookId === b.id);
+      list.push({ title: b.title, date: b.finish_date, track: t ? t.name : '독서앱' });
+    }
+  }
+  return list;
+}
+function activeActions(date) {
+  return (S.reading?.actions || []).map(a => {
+    const day = Math.round((parse(date) - parse(a.start_date)) / 864e5) + 1;
+    return { ...a, day, done: !!a.checks?.[date] };
+  }).filter(a => a.day >= 1 && a.day <= 30);
+}
+function dueReviews(date) {
+  return (S.reading?.reviews || []).filter(r => r.due_date <= date).map(r => ({ ...r, title: rBook(r.book_id)?.title || '책' }));
+}
+function readingStatusLine() {
+  if (!db.hasReading) return '';
+  if (S.reading) return `<p class="muted small">🔗 독서앱 연동됨 · <a href="${esc(S.profile.links.readingApp)}" target="_blank" rel="noopener">독서앱 열기 ↗</a></p>`;
+  return `<p class="small"><a href="#" data-act="gotab" data-tab="set">🔗 독서앱 연결하기 ›</a> <span class="muted">책·쪽수·독서 시간 자동 불러오기</span></p>`;
+}
+const bookOpts = sel => `<option value="">직접 입력</option>` + (S.reading?.books || []).filter(b => b.status !== 'done' || b.id === sel)
+  .map(b => `<option value="${b.id}" ${b.id === sel ? 'selected' : ''}>${esc(b.title)}${b.status === 'want' ? ' (읽을 책)' : b.status === 'done' ? ' (완독)' : ''}</option>`).join('');
 
 /* ================= PLAN ================= */
 function planView() {
@@ -445,15 +511,17 @@ function planView() {
 
   <section class="card">
     <h3>📚 독서 트랙 계획 <small>책 · 쪽수 · 실행 과제 (리뷰/토론은 별도 대화창)</small></h3>
-    ${p.tracks.map((t, i) => `
+    ${readingStatusLine()}
+    ${p.tracks.map((t, i) => { const tb = trackBook(t); return `
       <div class="track-edit">
         <div class="row"><b class="w8">${esc(t.name)}</b>
-          <input data-bind="profile.tracks.${i}.book" value="${esc(t.book)}" placeholder="읽는 책" class="grow" />
-          <input type="number" min="0" data-bind="profile.tracks.${i}.total" value="${t.total || ''}" placeholder="총쪽" class="w5" /></div>
+          ${S.reading ? `<select data-bind="profile.tracks.${i}.bookId" class="grow">${bookOpts(t.bookId)}</select>` : ''}
+          ${tb.linked ? `<span class="muted small">${tb.page || 0}/${tb.total || '?'}쪽</span>` : `<input data-bind="profile.tracks.${i}.book" value="${esc(t.book)}" placeholder="읽는 책" class="grow" />
+          <input type="number" min="0" data-bind="profile.tracks.${i}.total" value="${t.total || ''}" placeholder="총쪽" class="w5" />`}</div>
         <div class="row"><span class="w8 muted">실행 과제</span>
           <input data-bind="profile.tracks.${i}.action" value="${esc(t.action)}" placeholder="책에서 가져온 행동 1개" class="grow" />
           <button class="sm" data-act="action2task" data-i="${i}" ${t.action ? '' : 'disabled'}>오늘 할 일로</button></div>
-      </div>`).join('')}
+      </div>`; }).join('')}
     <p class="muted">독서 기록·리뷰는 <a href="${esc(p.links.readingApp)}" target="_blank" rel="noopener">독서앱</a>에서. 여기서는 진행 체크와 실행 과제 연결만 합니다.</p>
   </section>`;
 }
@@ -517,7 +585,7 @@ function doView() {
   const m = nowMin(); const isToday = S.date === today();
   const items = cavemanItems(S.date);
   const y = items.filter(c => d.caveman[c.no] === true).length;
-  const monthBooks = S.profile.books.filter(b => b.date?.slice(0, 7) === S.date.slice(0, 7)).length;
+  const monthBooks = doneBooks(monthBounds(S.date).first, monthBounds(S.date).last).length;
   return `
   ${nowCard()}
   <section class="card">
@@ -574,10 +642,21 @@ function doView() {
   </section>
 
   <section class="card">
-    <h3>📚 병렬독서 4트랙 <small>이번 달 완독 ${monthBooks}/${S.profile.monthlyBooks}권</small></h3>
+    <h3>📚 병렬독서 4트랙 <small>이번 달 완독 ${monthBooks}/${S.profile.monthlyBooks}권${S.reading ? ` · 오늘 ${readMinutes(S.date, S.date)}분` : ''}</small></h3>
+    ${readingStatusLine()}
     ${S.profile.tracks.map((t, i) => {
-      const p = t.total ? Math.min(1, (t.page || 0) / t.total) : 0;
-      const read = !!d.reading[t.id];
+      const tb = trackBook(t);
+      const p = tb.total ? Math.min(1, (tb.page || 0) / tb.total) : 0;
+      const read = trackRead(t, S.date);
+      const auto = t.bookId && sessionsOn(S.date, t.bookId).length;
+      if (tb.linked) return `<div class="track">
+        <div class="row"><b class="w8">${esc(t.name)}</b><span class="grow ellipsis">${esc(tb.title)}</span>
+          ${auto ? `<span class="pill done">오늘 ${readMinutes(S.date, S.date, t.bookId)}분 ✓</span>` : `<button class="toggle sm ${read ? 'on' : ''}" data-act="readtoggle" data-id="${t.id}">${read ? '오늘 읽음 ✓' : '오늘 읽음'}</button>`}</div>
+        <div class="row"><div class="bar sm grow"><i style="width:${p * 100}%"></i></div>
+          <span class="muted">${tb.page || 0} / ${tb.total || '?'}쪽 (${Math.round(p * 100)}%)</span>
+          <a class="small" href="${esc(S.profile.links.readingApp)}" target="_blank" rel="noopener">독서앱에서 기록 ↗</a></div>
+        ${t.action ? `<div class="muted small">실행 과제: ${esc(t.action)}</div>` : ''}
+      </div>`;
       return `<div class="track">
         <div class="row"><b class="w8">${esc(t.name)}</b><span class="grow ellipsis">${t.book ? esc(t.book) : '<span class="muted">책 미정 (Plan에서 입력)</span>'}</span>
           <button class="toggle sm ${read ? 'on' : ''}" data-act="readtoggle" data-id="${t.id}">${read ? '오늘 읽음 ✓' : '오늘 읽음'}</button></div>
@@ -610,7 +689,7 @@ function seeDay() {
   const d = S.day; const sc = score(d, S.date); const r = d.review || {};
   const skipped = d.blocks.filter(b => b.status === 'skip' || b.status === 'partial');
   const undone = d.top3.filter(t => t.text.trim() && !t.done);
-  const readCnt = Object.values(d.reading).filter(Boolean).length;
+  const readCnt = S.profile.tracks.filter(t => trackRead(t, S.date)).length;
   const runs = S.runs.filter(x => x.date === S.date);
   return `
   <section class="card">
@@ -618,7 +697,7 @@ function seeDay() {
     <div class="bigscore" style="--c:${scoreColor(sc?.total)}"><b>${sc?.total != null ? Math.round(sc.total * 100) : '–'}</b><span>PDS 점수</span></div>
     ${scoreRows(sc)}
     <ul class="facts">
-      <li>📚 독서 트랙 ${readCnt}/4 읽음</li>
+      <li>📚 독서 트랙 ${readCnt}/4 읽음${S.reading ? ` · 독서앱 기록 ${readMinutes(S.date, S.date)}분` : ''}</li>
       <li>🏃 런닝: ${runs.length ? runs.map(x => `${esc(x.title)} (${x.status === 'done' ? '완료' : x.status === 'skipped' ? '건너뜀' : '미기록'})`).join(', ') : '캘린더 훈련 없음'}</li>
       ${skipped.length ? `<li>⚠️ 못했거나 부분 실행: ${skipped.map(b => esc(b.title)).join(', ')}</li>` : ''}
       ${undone.length ? `<li>🎯 못 끝낸 핵심: ${undone.map(t => esc(t.text)).join(', ')}</li>` : ''}
@@ -672,7 +751,7 @@ function seeWeek(ws, rows) {
   const avg = (f) => { const v = scs.map(f).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const runsDone = S.runs.filter(r => r.status === 'done').length;
   const runsPlan = S.runs.filter(r => !/휴식|rest/i.test(r.type + r.title)).length;
-  const books = S.profile.books.filter(b => b.date >= ws && b.date <= addDays(ws, 6));
+  const books = doneBooks(ws, addDays(ws, 6));
   const reviews = scs.filter(x => x.d?.review?.at).length;
   const w = S.week; const r = w.review || {};
   const H = 120;
@@ -730,7 +809,7 @@ function seeMonth(first, last, rows, runs) {
   const map = Object.fromEntries(rows.map(r => [r.date, r.data]));
   if (S.date >= first && S.date <= last) map[S.date] = S.day;
   const { cells, vals } = calCells(first, last, map, runs, 'goto');
-  const books = S.profile.books.filter(b => b.date >= first && b.date <= last);
+  const books = doneBooks(first, last);
   const reviews = rows.filter(r => r.data?.review?.at).length;
   const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   const caveAvg = (() => { const v = rows.map(r => score(r.data, r.date)?.cave?.p).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; })();
@@ -810,6 +889,16 @@ function settingsView() {
       <button class="icon" data-act="delbook" data-id="${b.id}">✕</button></li>`).join('')}</ul>` : '<p class="muted">아직 없어요.</p>'}
     <div class="row"><input id="bookadd" placeholder="완독한 책 직접 추가" class="grow" /><button data-act="addbook">추가</button></div>
   </section>
+
+  ${db.hasReading ? `<section class="card" id="readingconnect">
+    <h3>📖 독서앱 연동 <small>책·쪽수·독서 시간·완독·실행 실험·복습을 읽기 전용으로 불러옴</small></h3>
+    ${S.reading ? `<p>연결됨: <b>${esc(S.reading.email)}</b> · 책 ${S.reading.books.length}권</p>
+      <div class="btnrow"><button data-act="readrefresh">새로고침</button><button class="ghost" data-act="readdisconnect">연결 해제</button></div>
+      <p class="muted small">트랙별 책 지정은 Plan 탭 '독서 트랙 계획'에서 합니다.</p>`
+      : `<p class="muted small">독서앱 계정(이메일/비밀번호)으로 한 번 연결하면 이 기기에서 계속 유지됩니다.${S.readingErr ? ` (오류: ${esc(S.readingErr)})` : ''}</p>
+      <div class="row"><input id="remail" type="email" placeholder="독서앱 이메일" value="${esc(S.user.email)}" class="grow" /></div>
+      <div class="row"><input id="rpw" type="password" placeholder="독서앱 비밀번호" class="grow" autocomplete="current-password" /><button class="primary" data-act="readconnect">연결</button></div>`}
+  </section>` : ''}
 
   <section class="card">
     <h3>🔗 연결 앱 · 리뷰 시간</h3>
@@ -928,6 +1017,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'newtask') { e.preventDefault(); act('addtask'); }
+  if (e.key === 'Enter' && e.target.id === 'rpw') { e.preventDefault(); act('readconnect'); }
   if (e.key === 'Enter' && e.target.dataset?.ph) { e.preventDefault(); act('addtaskph', { ph: e.target.dataset.ph }); }
   if (e.key === 'Enter' && e.target.id === 'bookadd') { e.preventDefault(); act('addbook'); }
   if (e.key === 'Enter' && e.target.closest?.('#loginform')) { e.preventDefault(); act('login'); }
@@ -1028,6 +1118,16 @@ async function act(a, ds = {}, el) {
       setTimeout(() => URL.revokeObjectURL(url), 2000); break;
     }
     case 'logout': await flush(); await db.signOut(); S.user = null; render(); break;
+    case 'openurl': window.open(ds.url, '_blank', 'noopener'); break;
+    case 'readconnect': {
+      const em = $('#remail')?.value.trim(); const pw = $('#rpw')?.value;
+      if (!em || !pw) { toast('이메일과 비밀번호를 입력하세요'); break; }
+      try { await db.readingConnect(em, pw); await loadReading(S.date); S.home = null; toast('독서앱 연결 완료 📖'); render(); }
+      catch (e) { toast('연결 실패: ' + (e.message || e).replace('Invalid login credentials', '이메일 또는 비밀번호가 맞지 않아요')); }
+      break;
+    }
+    case 'readdisconnect': if (confirm('독서앱 연결을 해제할까요? (독서앱 데이터는 그대로)')) { await db.readingDisconnect(); S.reading = null; render(); } break;
+    case 'readrefresh': await loadReading(S.date); toast('독서앱 데이터를 다시 불러왔어요'); render(); break;
     // auth
     case 'login': case 'signup': case 'reset': await authAction(a); break;
   }
@@ -1066,7 +1166,11 @@ async function authAction(a) {
     if (a === 'reset') { if (!email) throw new Error('이메일을 입력하세요'); await db.sendPasswordReset(email); msg.textContent = '재설정 메일을 보냈어요.'; return; }
     if (!email || !pw) throw new Error('이메일과 비밀번호를 입력하세요');
     if (a === 'signup') { const r = await db.signUp(email, pw); if (!r.session) { msg.textContent = '가입 완료. 메일 인증 후 로그인하세요.'; return; } }
-    else await db.signIn(email, pw);
+    else {
+      await db.signIn(email, pw);
+      // 같은 계정으로 독서앱도 자동 연결 시도 (실패해도 무시)
+      if (db.hasReading && !(await db.readingUser())) { try { await db.readingConnect(email, pw); } catch { } }
+    }
     await boot();
   } catch (e) { msg.textContent = (e.message || String(e)).replace('Invalid login credentials', '이메일 또는 비밀번호가 맞지 않아요'); }
 }
@@ -1083,6 +1187,7 @@ async function boot() {
   await loadDate(today());
 }
 db.init();
+db.initReading();
 db.onAuth(async (ev) => {
   if (ev === 'PASSWORD_RECOVERY') {
     const pw = prompt('새 비밀번호를 입력하세요 (6자 이상)');
