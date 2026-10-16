@@ -649,6 +649,8 @@ function focusOverlay() {
       <h2>${esc(f.title)}</h2>
       ${/글쓰기|골든/.test(f.title) ? '<p class="warn">📵 휴대폰 알림 차단 했나요?</p>' : ''}
       <div class="ftime" id="ftime">${pad(Math.floor(left / 60))}:${pad(left % 60)}</div>
+      <div class="btnrow center">${[25, 50].map(m => `<button class="sm" data-act="focusset" data-m="${m}">${m}분</button>`).join('')}
+        ${f.blockEnd ? `<button class="sm" data-act="focusset" data-m="end">블록 끝(${f.blockEnd})까지</button>` : ''}</div>
       <div class="btnrow center"><button class="primary" data-act="focusdone">완료로 기록</button><button data-act="focusstop">중단</button></div>
     </div></div>`;
 }
@@ -656,10 +658,17 @@ function startFocus(i) {
   const b = S.day.blocks[i];
   const left = toMin(b.end) - nowMin();
   const def = S.date === today() && left > 0 ? left : toMin(b.end) - toMin(b.start);
-  const min = Number(prompt('몇 분 집중할까요?', String(Math.min(def, 120))));
-  if (!min || min <= 0) return;
-  localStorage.setItem(FKEY, JSON.stringify({ date: S.date, i, blockId: b.id, title: b.title, end: Date.now() + min * 60000, min }));
+  const min = Math.max(1, Math.min(def, 50));
+  localStorage.setItem(FKEY, JSON.stringify({ date: S.date, i, blockId: b.id, title: b.title, blockEnd: b.end, end: Date.now() + min * 60000, min, start: Date.now() }));
   render();
+}
+function setFocusLen(m) {
+  const f = getFocus(); if (!f) return;
+  let min;
+  if (m === 'end') { const e = new Date(); e.setHours(...f.blockEnd.split(':').map(Number), 0, 0); min = Math.max(1, Math.round((e - f.start) / 60000)); }
+  else min = Number(m);
+  Object.assign(f, { min, end: f.start + min * 60000, notified: false });
+  localStorage.setItem(FKEY, JSON.stringify(f)); render();
 }
 async function endFocus(done) {
   const f = getFocus(); localStorage.removeItem(FKEY);
@@ -667,7 +676,7 @@ async function endFocus(done) {
     if (f.date !== S.date) await loadDate(f.date);
     const b = S.day.blocks.find(x => x.id === f.blockId);
     if (b) b.status = 'done';
-    S.day.focus = [...(S.day.focus || []), { title: f.title, min: f.min, at: new Date().toISOString() }];
+    S.day.focus = [...(S.day.focus || []), { title: f.title, min: f.start ? Math.max(1, Math.round((Math.min(Date.now(), f.end) - f.start) / 60000)) : f.min, at: new Date().toISOString() }];
     markDirty('day');
   }
   render();
@@ -786,6 +795,7 @@ async function act(a, ds = {}, el) {
       markDirty('profile'); markDirty('day'); toast('완독 기록 완료 📚'); render(); break;
     }
     case 'focus': startFocus(Number(ds.i)); break;
+    case 'focusset': setFocusLen(ds.m); break;
     case 'focusdone': await endFocus(true); toast('완료로 기록했어요'); break;
     case 'focusstop': await endFocus(false); break;
     // see
