@@ -379,7 +379,7 @@ function readArea() {
       const tb = trackBook(t); const on = trackRead(t, S.date);
       const pr = tb.total ? Math.min(1, (tb.page || 0) / tb.total) : 0;
       return `<li><span class="chk ${on ? 'on' : ''}" data-act="readtoggle" data-id="${t.id}" title="오늘 읽음">${on ? '✓' : ''}</span>
-        <span class="tn">${esc(t.name)}</span><span class="bk ellipsis">${tb.title ? esc(tb.title) : '<span class="muted">책 미정</span>'}</span>
+        <span class="tn">${esc(t.name)}</span><span class="bk ellipsis">${tb.title ? esc(tb.title) : `<span class="muted" ${tb.finished ? `title="완독: ${esc(tb.finished)}"` : ''}>${tb.finished ? '다음 책 미정' : '책 미정'}</span>`}</span>
         <span class="pc">${tb.total ? Math.round(pr * 100) + '%' : ''}</span></li>`;
     }).join('')}</ul>
     ${loose.length ? `<p class="muted small">트랙 미지정: ${loose.map(b => esc(b.title)).join(', ')} · <a href="#" data-act="gotab" data-tab="plan">Plan에서 지정</a></p>` : ''}
@@ -488,6 +488,8 @@ const rBook = id => S.reading?.books.find(b => b.id === id);
 /** 트랙의 책: 독서앱 책이 연결돼 있으면 그 데이터, 아니면 직접 입력값 */
 function trackBook(t) {
   const b = t.bookId && rBook(t.bookId);
+  // 완독한 책은 트랙의 '읽는 책'에서 제외 (다음 책 미정으로 표시)
+  if (b && b.status === 'done') return { title: '', total: 0, page: 0, linked: false, finished: b.title };
   if (b) return { title: b.title, total: b.pages || 0, page: b.current_page || 0, linked: true, b };
   return { title: t.book, total: t.total || 0, page: t.page || 0, linked: false };
 }
