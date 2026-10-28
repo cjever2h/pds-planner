@@ -68,17 +68,47 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) flush
 function mergeProfile(p) {
   const d = defaultProfile();
   if (!p) return d;
-  return { ...d, ...p, links: { ...d.links, ...(p.links || {}) }, race: { ...d.race, ...(p.race || {}) } };
+  return { ...d, ...p, links: { ...d.links, ...(p.links || {}) }, race: { ...d.race, ...(p.race || {}) }, work: { ...(p.work || {}) } };
+}
+/* ---------- 근무표: 평일=근무, 주말=휴무가 기본, profile.work[YYYY-MM-DD] = 'work' | 'off' 로 날짜별 지정 ---------- */
+const defaultWork = date => (isWeekend(date) ? 'off' : 'work');
+const workMode = date => S.profile?.work?.[date] || defaultWork(date);
+const isWorkSet = date => !!S.profile?.work?.[date];
+/** 평일(월) 템플릿의 출근·업무 구간과 그 안의 블록 (출근 이동 ~ 퇴근) */
+function workWindow(template) {
+  const mon = template.filter(t => t.days.includes(1));
+  const core = mon.filter(t => t.area === 'work' || /출근/.test(t.title));
+  if (!core.length) return null;
+  const s = Math.min(...core.map(t => toMin(t.start))); const e = Math.max(...core.map(t => toMin(t.end)));
+  return { s, e, blocks: mon.filter(t => toMin(t.start) >= s && toMin(t.end) <= e) };
 }
 function blocksFor(date, template) {
   const w = dow(date);
-  return template.filter(t => t.days.includes(w))
-    .map(t => ({ id: uid(), tid: t.id, start: t.start, end: t.end, title: t.title, area: t.area, note: t.note || '', status: '' }))
+  let list = template.filter(t => t.days.includes(w));
+  const mode = workMode(date); const win = workWindow(template);
+  if (win) {
+    const winIds = new Set(win.blocks.map(t => t.id));
+    const hasWork = list.some(t => t.area === 'work');
+    if (mode === 'work' && !hasWork) {
+      // 주말 근무: 출근~퇴근 시간에 겹치는 블록(런닝 제외)을 빼고 평일 출근·업무 블록을 넣는다
+      list = list.filter(t => t.area === 'run' || toMin(t.end) <= win.s || toMin(t.start) >= win.e).concat(win.blocks);
+    } else if (mode === 'off' && hasWork) {
+      list = list.filter(t => !winIds.has(t.id) && t.area !== 'work');
+    }
+  }
+  return list.map(t => ({ id: uid(), tid: t.id, start: t.start, end: t.end, title: t.title, area: t.area, note: t.note || '', status: '' }))
     .sort((a, b) => toMin(a.start) - toMin(b.start) || toMin(b.end) - toMin(a.end));
+}
+/** 저장된 날의 근무 구분이 바뀌었고 아직 체크한 블록이 없으면 블록을 다시 만든다 */
+function syncWork(day, date) {
+  const mode = workMode(date);
+  if ((day.workMode ?? defaultWork(date)) === mode) { day.workMode = mode; return false; }
+  if (day.blocks.some(b => b.status)) return false;
+  day.blocks = blocksFor(date, S.profile.template); day.workMode = mode; return true;
 }
 function newDay(date) {
   return {
-    v: 1, intention: '',
+    v: 1, intention: '', workMode: workMode(date),
     blocks: blocksFor(date, S.profile.template),
     top3: [{ text: '', area: 'biz', done: false }, { text: '', area: 'run', done: false }, { text: '', area: 'read', done: false }],
     tasks: [], caveman: {}, sns: {}, reading: {}, review: {}, focus: [],
@@ -132,6 +162,7 @@ async function loadDate(date) {
     db.runningFor(ws, addDays(ws, 6)), loadReading(date),
   ]);
   S.day = normDay(day, date);
+  if (day && syncWork(S.day, date)) markDirty('day');
   S.prev = prev;
   S.week = normWeek(week);
   S.nextWeek = normWeek(nextWeek);
@@ -201,10 +232,47 @@ function calCells(first, last, map, runs, act) {
     const sc = score(map[dt], dt); if (sc?.total != null) vals.push(sc.total);
     const run = runs.find(r => r.date === dt && r.status === 'done');
     const planned = !run && runs.find(r => r.date === dt && r.status === 'planned' && !/휴식|rest/i.test(r.type + r.title));
-    cells.push(`<button class="mday ${dt === S.date ? 'sel' : ''} ${dt === today() ? 'today' : ''}" data-act="${act}" data-d="${dt}" style="background:${scoreColor(sc?.total)}" title="${dt}${sc?.total != null ? ' PDS ' + Math.round(sc.total * 100) : ''}">
-      <span>${i}</span>${sc?.total != null ? `<b>${Math.round(sc.total * 100)}</b>` : ''}${run ? '<i>🏃</i>' : planned ? '<i class="pl">·</i>' : ''}${map[dt]?.review?.at ? '<i class="rv">✍</i>' : ''}${sessionsOn(dt).length ? '<i class="rd">📖</i>' : ''}</button>`);
+    const wm = workMode(dt);
+    const wx = wm === 'work' && isWeekend(dt) ? '<b class="wk-x">출</b>' : wm === 'off' && !isWeekend(dt) ? '<b class="wk-x off">휴</b>' : '';
+    cells.push(`<button class="mday ${dt === S.date ? 'sel' : ''} ${dt === today() ? 'today' : ''} ${wm === 'work' ? 'wk' : ''}" data-act="${act}" data-d="${dt}" style="background:${scoreColor(sc?.total)}" title="${dt}${sc?.total != null ? ' PDS ' + Math.round(sc.total * 100) : ''}">
+      ${wx}<span>${i}</span>${sc?.total != null ? `<b>${Math.round(sc.total * 100)}</b>` : ''}${run ? '<i>🏃</i>' : planned ? '<i class="pl">·</i>' : ''}${map[dt]?.review?.at ? '<i class="rv">✍</i>' : ''}${sessionsOn(dt).length ? '<i class="rd">📖</i>' : ''}</button>`);
   }
   return { cells, vals };
+}
+function workPill(date) {
+  const m = workMode(date); const win = workWindow(S.profile.template);
+  const hrs = win ? (() => { const w = win.blocks.find(t => t.area === 'work'); return w ? ` ${w.start}~${w.end}` : ''; })() : '';
+  return m === 'work' ? `<span class="pill work">💼 근무${hrs}</span>` : `<span class="pill off">🌿 휴무</span>`;
+}
+function workSummary(first, last) {
+  let w = 0, o = 0;
+  for (let dt = first; dt <= last; dt = addDays(dt, 1)) (workMode(dt) === 'work' ? w++ : o++);
+  return `근무 ${w}일 · 휴무 ${o}일`;
+}
+/** 설정: 근무표 달력 (누를 때마다 근무 ↔ 휴무) */
+function workSettings() {
+  const base = S.workMonth || S.date.slice(0, 7);
+  const { first, last } = monthBounds(base + '-01');
+  const start = parse(first).getDay();
+  const cells = [];
+  for (let i = 0; i < (start + 6) % 7; i++) cells.push('<div></div>');
+  for (let dt = first; dt <= last; dt = addDays(dt, 1)) {
+    const m = workMode(dt); const set = isWorkSet(dt); const exc = m !== defaultWork(dt);
+    cells.push(`<button class="wday ${m} ${exc ? 'exc' : ''} ${set ? 'set' : ''}" data-act="workcycle" data-d="${dt}" title="${dt} ${m === 'work' ? '근무' : '휴무'}${set ? '' : ' (기본값)'}">
+      <span>${Number(dt.slice(8))}</span><small>${m === 'work' ? '근무' : '휴무'}</small></button>`);
+  }
+  const setN = Object.keys(S.profile.work || {}).filter(k => k >= first && k <= last).length;
+  return `<section class="card">
+    <div class="calhead"><button class="icon" data-act="workmonth" data-n="-1">‹</button>
+      <h3>💼 근무표 · ${parse(first).getFullYear()}년 ${parse(first).getMonth() + 1}월</h3>
+      <button class="icon" data-act="workmonth" data-n="1">›</button></div>
+    <p class="muted small">날짜를 누를 때마다 근무 ↔ 휴무. 지정 안 한 날은 평일 근무 · 주말 휴무(점선). 주말 근무일에는 출근·업무 블록이, 평일 휴무일에는 업무 블록이 빠진 하루가 자동으로 만들어져요.</p>
+    <div class="mgrid head">${['월', '화', '수', '목', '금', '토', '일'].map(x => `<div>${x}</div>`).join('')}</div>
+    <div class="mgrid">${cells.join('')}</div>
+    <p class="small"><b>${workSummary(first, last)}</b> ${setN ? `<span class="muted">· 직접 지정 ${setN}일</span>` : '<span class="muted">· 아직 기본값</span>'}</p>
+    <div class="btnrow"><button data-act="workfill" data-m="${base}">이 달 기본값으로 확정</button>
+      <button class="ghost" data-act="workclear" data-m="${base}">이 달 지정 지우기</button></div>
+  </section>`;
 }
 function homeKey() { const { first, last } = monthBounds(S.date); const ws = weekStart(S.date); return [first, last, ws].join('|'); }
 async function loadHome() {
@@ -236,7 +304,7 @@ function homeView() {
   const items = cavemanItems(S.date); const caveY = items.filter(c => d.caveman[c.no] === true).length;
   return `
   <section class="summary">
-    <div class="sumhead"><h2>${isToday ? '오늘' : fmtDate(S.date)} 한눈에 보기</h2>
+    <div class="sumhead"><h2>${isToday ? '오늘' : fmtDate(S.date)} 한눈에 보기 ${workPill(S.date)}</h2>
       ${cur ? `<span class="nowpill" style="--c:${AREAS[cur.area]?.color}">지금 · ${esc(cur.title)} ~${cur.end}</span>` : ''}</div>
     <div class="kpis">
       <div><b style="color:${scoreColor(sc?.total)}">${sc?.total != null ? Math.round(sc.total * 100) : '–'}</b><span>PDS 점수</span></div>
@@ -257,7 +325,7 @@ function homeView() {
       </div>
       <div class="mgrid head">${['월', '화', '수', '목', '금', '토', '일'].map(x => `<div>${x}</div>`).join('')}</div>
       <div class="mgrid">${cells.join('')}</div>
-      <p class="muted small">${H.loading ? '불러오는 중… · ' : ''}월 평균 PDS ${pct(monthAvg)} · 🏃 런닝 완료 · ✍ 리뷰 · 날짜를 누르면 그날 현황</p>
+      <p class="muted small">${H.loading ? '불러오는 중… · ' : ''}월 평균 PDS ${pct(monthAvg)} · ${workSummary(first, last)} · 🏃 런닝 완료 · ✍ 리뷰 · <span class="wk-leg"></span> 근무일 · <b class="wk-x">출</b> 주말 근무 · <b class="wk-x off">휴</b> 평일 휴무</p>
     </section>
     <div class="areas">
       ${runArea(H, days)}${readArea()}${snsArea(map, days)}${bizArea(map, days)}
@@ -456,7 +524,7 @@ function planView() {
   const ws = weekStart(S.date);
   return `
   <section class="card">
-    <h2>📋 Plan · ${fmtDate(S.date)} ${isWeekend(S.date) ? '<span class="pill">주말</span>' : '<span class="pill">평일</span>'}</h2>
+    <h2>📋 Plan · ${fmtDate(S.date)} ${isWeekend(S.date) ? '<span class="pill">주말</span>' : '<span class="pill">평일</span>'} ${workPill(S.date)}</h2>
     ${lesson ? `<div class="lesson"><div><small>어제 리뷰에서 정한 '내일 바꿀 1가지'</small><p>${esc(lesson)}</p></div>
       <button class="sm" data-act="lesson2task">할 일로 추가</button></div>` : ''}
     <label class="lbl">오늘의 의도 (한 줄)</label>
@@ -865,6 +933,8 @@ function settingsView() {
       <button class="ghost" data-act="applytpl">오늘 블록에 다시 적용</button></div>
   </section>
 
+  ${workSettings()}
+
   <section class="card">
     <h3>🔘 원시인 버튼 항목</h3>
     ${p.caveman.map((c, i) => `<div class="row"><span class="w3">${c.no}</span>
@@ -1099,6 +1169,25 @@ async function act(a, ds = {}, el) {
       S.tab = 'plan'; await loadDate(addDays(S.date, 1)); scrollTo(0, 0); break;
     case 'goaldone': S.week.goalsDone = { ...S.week.goalsDone, [ds.a]: el.checked }; markDirty('week'); break;
     // settings
+    case 'workcycle': {
+      const dt = ds.d; p.work ||= {};
+      p.work[dt] = workMode(dt) === 'work' ? 'off' : 'work';
+      markDirty('profile');
+      if (dt === S.date && syncWork(d, dt)) markDirty('day');
+      S.home = null; render(); break;
+    }
+    case 'workfill': {
+      p.work ||= {}; const { first, last } = monthBounds(ds.m + '-01');
+      for (let dt = first; dt <= last; dt = addDays(dt, 1)) if (!p.work[dt]) p.work[dt] = defaultWork(dt);
+      markDirty('profile'); toast('이 달 근무표를 확정했어요'); render(); break;
+    }
+    case 'workclear': {
+      if (!confirm('이 달 근무표 지정을 모두 지울까요? (평일 근무·주말 휴무 기본값으로)')) break;
+      const { first, last } = monthBounds(ds.m + '-01');
+      for (const k of Object.keys(p.work || {})) if (k >= first && k <= last) delete p.work[k];
+      markDirty('profile'); if (syncWork(d, S.date)) markDirty('day'); S.home = null; render(); break;
+    }
+    case 'workmonth': { const x = parse((S.workMonth || S.date.slice(0, 7)) + '-01'); x.setMonth(x.getMonth() + Number(ds.n)); S.workMonth = ymd(x).slice(0, 7); render(); break; }
     case 'tplday': { const t = p.template[ds.i]; const w = Number(ds.w); t.days = t.days.includes(w) ? t.days.filter(x => x !== w) : [...t.days, w]; markDirty('profile'); render(); break; }
     case 'addtpl': p.template.push({ id: 't' + uid(), start: '12:00', end: '13:00', title: '새 블록', area: 'life', days: [1, 2, 3, 4, 5], note: '' }); markDirty('profile'); render(); break;
     case 'deltpl': p.template.splice(Number(ds.i), 1); markDirty('profile'); render(); break;
