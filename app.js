@@ -615,7 +615,7 @@ function planView() {
           <button class="sm" data-act="action2task" data-i="${i}" ${t.action ? '' : 'disabled'}>오늘 할 일로</button></div>
       </div>`; }).join('')}
     <p class="muted">독서 기록·리뷰는 독서앱에서. 여기서는 진행 체크와 실행 과제 연결만 합니다.</p>
-    <div class="btnrow areabtns"><button class="sm" data-act="openurl" data-url="${esc(p.links.readingApp)}">📖 독서앱 열기 ↗</button></div>
+    ${S.reading ? '' : `<div class="btnrow areabtns"><button class="sm" data-act="openurl" data-url="${esc(p.links.readingApp)}">📖 독서앱 열기 ↗</button></div>`}
   </section>`;
 }
 
