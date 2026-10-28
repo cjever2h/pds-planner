@@ -95,6 +95,18 @@ export function defaultProfile() {
       readingApp: 'https://reading-app-beige.vercel.app',
     },
     reviewTime: '21:30',
+    // 알림 설정 (설정 탭 > 알림). push=한 기기라도 웹푸시를 켜면 true → 앱이 14일치 루틴 알림을 서버에 예약
+    notify: {
+      push: false,
+      eventDefault: '10',          // 새 일정 기본 알림: none | 0 | 10 | 30 | 60 | 1440 | eve
+      allDayTime: '09:00',         // 종일 일정의 기준 시각 (정각/…분 전 계산용)
+      blockOn: true,
+      blockLead: '5',              // 블록 시작 몇 분 전
+      blockAreas: ['run', 'biz', 'read'],
+      planOn: true, planTime: '06:50',
+      reviewOn: true,              // 시각은 reviewTime
+      focusOn: true,
+    },
   };
 }
 

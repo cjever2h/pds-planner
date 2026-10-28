@@ -11,7 +11,7 @@ let uid = null;
 const LKEY = 'pds-planner-v1';
 function lload() {
   let d; try { d = JSON.parse(localStorage.getItem(LKEY)) || {}; } catch { d = {}; }
-  d.profile ||= null; d.days ||= {}; d.weeks ||= {};
+  d.profile ||= null; d.days ||= {}; d.weeks ||= {}; d.events ||= [];
   return d;
 }
 function lsave(d) { localStorage.setItem(LKEY, JSON.stringify(d)); }
@@ -86,6 +86,55 @@ export async function saveWeek(weekStart, data) {
   chk(await sb.from('pds_weeks').upsert({ user_id: uid, week_start: weekStart, data, updated_at: now() }, { onConflict: 'user_id,week_start' }));
 }
 
+/* ---------- 일정 (pds_events: 블록과 별도 저장 → 근무표 변경·템플릿 재생성에 영향 없음) ---------- */
+const EV_COLS = ['date', 'start_time', 'end_time', 'title', 'area', 'memo', 'remind', 'remind_at', 'reminded_at', 'done'];
+const evRow = ev => Object.fromEntries(EV_COLS.map(k => [k, ev[k] ?? (k === 'done' ? false : k === 'memo' ? '' : null)]));
+export async function listEvents(from, to) {
+  if (!isCloud) return lload().events.filter(e => e.date >= from && e.date <= to);
+  return chk(await sb.from('pds_events').select('id,' + EV_COLS.join(',')).gte('date', from).lte('date', to).order('date'));
+}
+export async function saveEvent(ev) {
+  const row = { ...evRow(ev), updated_at: now() };
+  if (!isCloud) {
+    const d = lload(); const saved = { ...row, id: ev.id || 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
+    d.events = d.events.filter(e => e.id !== saved.id).concat(saved); lsave(d); return saved;
+  }
+  if (ev.id) return chk(await sb.from('pds_events').update(row).eq('id', ev.id).select('id,' + EV_COLS.join(',')).single());
+  return chk(await sb.from('pds_events').insert({ ...row, user_id: uid }).select('id,' + EV_COLS.join(',')).single());
+}
+export async function deleteEvent(id) {
+  if (!isCloud) { const d = lload(); d.events = d.events.filter(e => e.id !== id); lsave(d); return; }
+  chk(await sb.from('pds_events').delete().eq('id', id));
+}
+
+/* ---------- 웹푸시: 기기 구독 + 루틴 알림 예약 큐 (발송은 Edge Function pds-push 가 1분마다) ---------- */
+export async function savePushSub(j, ua) {
+  chk(await sb.from('pds_push_subs').upsert({ user_id: uid, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: ua || null }, { onConflict: 'user_id,endpoint' }));
+}
+export async function deletePushSub(endpoint) { chk(await sb.from('pds_push_subs').delete().eq('endpoint', endpoint)); }
+export async function countPushSubs() {
+  const { count, error } = await sb.from('pds_push_subs').select('endpoint', { count: 'exact', head: true });
+  if (error) throw error; return count || 0;
+}
+/** 아직 안 보낸 미래 루틴 알림(집중 타이머 제외)을 지우고 새로 넣는다. 이미 보낸 key 는 그대로(중복 방지) */
+export async function replacePushQueue(items) {
+  chk(await sb.from('pds_push_queue').delete().is('sent_at', null).gte('fire_at', now()).neq('kind', 'focus'));
+  if (!items.length) return;
+  chk(await sb.from('pds_push_queue').upsert(items.map(x => ({ ...x, user_id: uid })), { onConflict: 'user_id,key', ignoreDuplicates: true }));
+}
+export async function queuePush(item) {
+  chk(await sb.from('pds_push_queue').upsert({ ...item, user_id: uid, sent_at: null }, { onConflict: 'user_id,key' }));
+}
+export async function unqueuePush(key) { chk(await sb.from('pds_push_queue').delete().eq('key', key).is('sent_at', null)); }
+export async function pendingPushCount() {
+  const { count, error } = await sb.from('pds_push_queue').select('key', { count: 'exact', head: true }).is('sent_at', null).gte('fire_at', now());
+  if (error) throw error; return count || 0;
+}
+export async function sendTestPush() {
+  const { data, error } = await sb.functions.invoke('pds-push', { body: { test: true } });
+  if (error) throw error; return data;
+}
+
 /* ---------- 런닝 캘린더 연동 (읽기 전용) ---------- */
 export async function runningFor(from, to) {
   if (!isCloud) return [];
@@ -145,7 +194,8 @@ export async function exportAll() {
   const profile = await getProfile();
   const days = chk(await sb.from('pds_days').select('date,data').order('date'));
   const weeks = chk(await sb.from('pds_weeks').select('week_start,data').order('week_start'));
-  return { exported_at: now(), app: 'pds-planner', profile, days, weeks };
+  const events = chk(await sb.from('pds_events').select('id,' + EV_COLS.join(',')).order('date'));
+  return { exported_at: now(), app: 'pds-planner', profile, days, weeks, events };
 }
 export async function importAll(j) {
   if (j.profile) await saveProfile(j.profile);
@@ -153,4 +203,6 @@ export async function importAll(j) {
   for (const d of days) await saveDay(d.date, d.data);
   const weeks = Array.isArray(j.weeks) ? j.weeks : Object.entries(j.weeks || {}).map(([week_start, data]) => ({ week_start, data }));
   for (const w of weeks) await saveWeek(w.week_start, w.data);
+  const have = new Set((await listEvents('0000-01-01', '9999-12-31')).map(e => e.id));
+  for (const e of j.events || []) await saveEvent({ ...e, id: have.has(e.id) ? e.id : undefined, reminded_at: null });
 }

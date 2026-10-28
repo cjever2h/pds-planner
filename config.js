@@ -7,3 +7,6 @@ export const SUPABASE_ANON_KEY = 'sb_publishable_8zyr4Cia8y1JiVOguUC12Q_ZOknEH3F
 // 독서앱(별도 Supabase 프로젝트) — 읽기 전용 연동. 독서앱 계정으로 한 번 연결하면 책·쪽수·독서 시간·실행 실험·복습을 불러옵니다.
 export const READING_URL = 'https://rdwizwmqkkgbulwjlsco.supabase.co';
 export const READING_KEY = 'sb_publishable_jTlLZWpD_c989ZW95CjPhQ_JYhJPJFX';
+
+// 웹 푸시 공개키 (런닝 캘린더와 같은 VAPID 키 쌍. 개인키는 Supabase 시크릿에만 있음)
+export const VAPID_PUBLIC_KEY = 'BP3DMkJ3mS5XoTWSwwaCzShaw3YPhit-JQBOOEZzNswstaPBahvoe38OG1nmQoemYu3cKhYyNCXPTY2UZZue6Oc';

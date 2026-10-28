@@ -1,6 +1,7 @@
 // 더원 PDS 플래너 — Plan(계획) · Do(실행) · See(리뷰)
 import * as db from './store.js';
 import { AREAS, defaultProfile, DEFAULT_TEMPLATE, DEFAULT_CAVEMAN, DEFAULT_SNS, SCORE_HELP } from './data.js';
+import { VAPID_PUBLIC_KEY } from './config.js';
 
 /* ================= utils ================= */
 const $ = (s, r = document) => r.querySelector(s);
@@ -32,6 +33,7 @@ const S = {
   user: null, profile: null, tab: 'home', seeView: 'day', home: null,
   date: today(), day: null, prev: null, week: null, nextWeek: null,
   runs: [], race: null, range: [], saving: false,
+  events: [], evKey: null, modal: null, push: { sub: false, devices: null, pending: null, msg: '' },
 };
 const dirty = new Set();
 let saveTimer = null;
@@ -54,6 +56,7 @@ async function flush() {
       if (j === 'profile') await db.saveProfile(S.profile);
     }
     setSaveState('저장됨 ✓');
+    if (jobs.includes('day') || jobs.includes('profile')) schedulePushSync();
   } catch (e) {
     jobs.forEach(j => dirty.add(j));
     setSaveState('저장 실패 — 다시 시도');
@@ -68,7 +71,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) flush
 function mergeProfile(p) {
   const d = defaultProfile();
   if (!p) return d;
-  return { ...d, ...p, links: { ...d.links, ...(p.links || {}) }, race: { ...d.race, ...(p.race || {}) }, work: { ...(p.work || {}) } };
+  return { ...d, ...p, links: { ...d.links, ...(p.links || {}) }, race: { ...d.race, ...(p.race || {}) }, work: { ...(p.work || {}) }, notify: { ...d.notify, ...(p.notify || {}) } };
 }
 /* ---------- 근무표: 평일=근무, 주말=휴무가 기본, profile.work[YYYY-MM-DD] = 'work' | 'off' 로 날짜별 지정 ---------- */
 const defaultWork = date => (isWeekend(date) ? 'off' : 'work');
@@ -159,7 +162,7 @@ async function loadDate(date) {
   const ws = weekStart(date);
   const [day, prev, week, nextWeek, runs] = await Promise.all([
     db.getDay(date), db.getDay(addDays(date, -1)), db.getWeek(ws), db.getWeek(addDays(ws, 7)),
-    db.runningFor(ws, addDays(ws, 6)), loadReading(date),
+    db.runningFor(ws, addDays(ws, 6)), loadReading(date), loadEvents(),
   ]);
   S.day = normDay(day, date);
   if (day && syncWork(S.day, date)) markDirty('day');
@@ -174,6 +177,7 @@ async function loadDate(date) {
 function render() {
   const app = $('#app');
   if (!S.user) { app.innerHTML = loginView(); return; }
+  readEvForm();
   const sc = score(S.day, S.date);
   const isToday = S.date === today();
   const dd = S.race ? Math.round((parse(S.race.date) - parse(today())) / 864e5) : null;
@@ -198,8 +202,9 @@ function render() {
     ${[['home', '⌂', '홈'], ['plan', 'P', '계획'], ['do', 'D', '실행'], ['see', 'S', '리뷰'], ['set', '⚙', '설정']].map(([k, i, l]) =>
       `<button data-act="tab" data-tab="${k}" class="${S.tab === k ? 'on' : ''}"><b>${i}</b><span>${l}</span></button>`).join('')}
   </nav>
-  ${focusOverlay()}`;
+  ${focusOverlay()}${modalView()}`;
   if (S.tab === 'see') afterSeeRender();
+  if (S.tab === 'set') refreshPushState();
 }
 
 function phaseBanner() {
@@ -234,8 +239,9 @@ function calCells(first, last, map, runs, act) {
     const planned = !run && runs.find(r => r.date === dt && r.status === 'planned' && !/휴식|rest/i.test(r.type + r.title));
     const wm = workMode(dt);
     const wx = wm === 'work' && isWeekend(dt) ? '<b class="wk-x">출</b>' : wm === 'off' && !isWeekend(dt) ? '<b class="wk-x off">휴</b>' : '';
-    cells.push(`<button class="mday ${dt === S.date ? 'sel' : ''} ${dt === today() ? 'today' : ''} ${wm === 'work' ? 'wk' : ''}" data-act="${act}" data-d="${dt}" style="background:${scoreColor(sc?.total)}" title="${dt}${sc?.total != null ? ' PDS ' + Math.round(sc.total * 100) : ''}">
-      ${wx}<span>${i}</span>${sc?.total != null ? `<b>${Math.round(sc.total * 100)}</b>` : ''}${run ? '<i>🏃</i>' : planned ? '<i class="pl">·</i>' : ''}${map[dt]?.review?.at ? '<i class="rv">✍</i>' : ''}${sessionsOn(dt).length ? '<i class="rd">📖</i>' : ''}</button>`);
+    const evs = eventsOn(dt); const evOpen = evs.filter(e => !e.done).length;
+    cells.push(`<button class="mday ${dt === S.date ? 'sel' : ''} ${dt === today() ? 'today' : ''} ${wm === 'work' ? 'wk' : ''}" data-act="${act}" data-d="${dt}" style="background:${scoreColor(sc?.total)}" title="${dt}${sc?.total != null ? ' PDS ' + Math.round(sc.total * 100) : ''}${evs.length ? ' · 일정 ' + evs.map(e => e.title).join(', ') : ''}">
+      ${wx}${evs.length ? `<i class="evc ${evOpen ? '' : 'alldone'}">${evs.length}</i>` : ''}<span>${i}</span>${sc?.total != null ? `<b>${Math.round(sc.total * 100)}</b>` : ''}${run ? '<i>🏃</i>' : planned ? '<i class="pl">·</i>' : ''}${map[dt]?.review?.at ? '<i class="rv">✍</i>' : ''}${sessionsOn(dt).length ? '<i class="rd">📖</i>' : ''}</button>`);
   }
   return { cells, vals };
 }
@@ -287,7 +293,7 @@ async function loadHome() {
     S.home = { key, map: Object.fromEntries(rows.map(r => [r.date, r.data])), runs };
   } catch { S.home = { key, map: {}, runs: [] }; }
   S.homeLoading = null;
-  if (S.tab === 'home') render();
+  if (S.tab === 'home' && !S.modal) render();
 }
 
 function homeView() {
@@ -316,6 +322,8 @@ function homeView() {
     ${d.intention ? `<p class="intent">🎯 ${esc(d.intention)}</p>` : ''}
   </section>
 
+  ${upcomingCard()}
+
   <div class="dash">
     <section class="card calcard">
       <div class="calhead">
@@ -325,7 +333,8 @@ function homeView() {
       </div>
       <div class="mgrid head">${['월', '화', '수', '목', '금', '토', '일'].map(x => `<div>${x}</div>`).join('')}</div>
       <div class="mgrid">${cells.join('')}</div>
-      <p class="muted small">${H.loading ? '불러오는 중… · ' : ''}월 평균 PDS ${pct(monthAvg)} · ${workSummary(first, last)} · 🏃 런닝 완료 · ✍ 리뷰 · <span class="wk-leg"></span> 근무일 · <b class="wk-x">출</b> 주말 근무 · <b class="wk-x off">휴</b> 평일 휴무</p>
+      <p class="muted small">${H.loading ? '불러오는 중… · ' : ''}월 평균 PDS ${pct(monthAvg)} · ${workSummary(first, last)} · 🏃 런닝 완료 · ✍ 리뷰 · <i class="evc leg">2</i> 일정 수 · <span class="wk-leg"></span> 근무일 · <b class="wk-x">출</b> 주말 근무 · <b class="wk-x off">휴</b> 평일 휴무</p>
+      ${dayEventsBlock(S.date)}
     </section>
     <div class="areas">
       ${runArea(H, days)}${readArea()}${snsArea(map, days)}${bizArea(map, days)}
@@ -444,11 +453,14 @@ function pdsBoard() {
   const runs = S.runs.filter(r => r.date === S.date && !/휴식|rest/i.test(r.type + r.title));
   const runLi = runs.map(r => `<li class="auto ${r.status === 'done' ? 'done' : ''}" data-act="gotab" data-tab="do"><span class="chk ${r.status === 'done' ? 'on' : ''}">${r.status === 'done' ? '✓' : ''}</span>
       <span class="grow">🏃 ${esc(r.title)}${r.planned_distance ? ` ${r.planned_distance}km` : ''}</span><span class="go">›</span></li>`).join('');
+  const evs = eventsOn(S.date);
+  const evLi = evs.map(e => `<li class="${e.done ? 'done' : ''}"><label><input type="checkbox" data-act="evdone" data-id="${e.id}" ${e.done ? 'checked' : ''} />
+      ${areaDot(e.area)}<span class="grow">📌 ${evTime(e)} ${esc(e.title)}</span></label><button class="icon" data-act="evedit" data-id="${e.id}" title="일정 수정">✎</button></li>`).join('');
   const col = (ph, title, autoHtml, extra = '') => {
     const mt = mine(ph);
     const all = [...(ph === 'plan' ? autoP : ph === 'see' ? autoS : []), ...mt.map(([t]) => t)];
-    const doneN = all.filter(x => x.done).length + (ph === 'do' ? d.top3.filter(t => t.text.trim() && t.done).length + runs.filter(r => r.status === 'done').length + acts.filter(a => a.done).length : 0);
-    const totalN = all.length + (ph === 'do' ? t3 + runs.length + acts.length : 0);
+    const doneN = all.filter(x => x.done).length + (ph === 'do' ? d.top3.filter(t => t.text.trim() && t.done).length + runs.filter(r => r.status === 'done').length + acts.filter(a => a.done).length + evs.filter(e => e.done).length : 0);
+    const totalN = all.length + (ph === 'do' ? t3 + runs.length + acts.length + evs.length : 0);
     return `<section class="card pcol pc-${ph}">
       <div class="phead"><b class="ph ph-${ph}">${PH[ph].k}</b><h3>${title}</h3><span class="muted small">${doneN}/${totalN}</span></div>
       <ul class="todo">${autoHtml}${extra}${mt.map(([t, i]) => taskLi(t, i)).join('')}</ul>
@@ -458,7 +470,7 @@ function pdsBoard() {
   };
   return `<div class="pdscols">
     ${col('plan', '계획', autoP.map(autoLi).join(''))}
-    ${col('do', '실행', topLi + runLi + acts.map(a => autoLi({ text: `🧪 실행 실험 D${a.day}/30: ${a.action}`, done: a.done, url: rUrl })).join(''))}
+    ${col('do', '실행', evLi + topLi + runLi + acts.map(a => autoLi({ text: `🧪 실행 실험 D${a.day}/30: ${a.action}`, done: a.done, url: rUrl })).join(''))}
     ${col('see', '리뷰', autoS.map(autoLi).join(''))}
   </div>`;
 }
@@ -529,6 +541,12 @@ function planView() {
       <button class="sm" data-act="lesson2task">할 일로 추가</button></div>` : ''}
     <label class="lbl">오늘의 의도 (한 줄)</label>
     <input data-bind="day.intention" value="${esc(d.intention)}" placeholder="예: 골든타임에 스레드 글 3개 초안 끝내기" />
+  </section>
+
+  <section class="card">
+    <div class="ahead"><h3>📌 일정 <small>블록과 별도 저장 · 근무표·템플릿을 바꿔도 그대로</small></h3>
+      <button class="sm primary" data-act="evnew" data-d="${S.date}">+ 일정 추가</button></div>
+    ${evList(eventsOn(S.date), { empty: '이 날 일정이 없어요.' })}
   </section>
 
   <section class="card">
@@ -659,7 +677,14 @@ function doView() {
   <section class="card">
     <h3>⏱ 타임라인 <small>${sc?.blocks ? `${sc.blocks.checked}/${sc.blocks.n} 체크 · 실행률 ${pct(sc.blocks.p)}` : ''}</small></h3>
     <ol class="timeline">
-    ${d.blocks.map((b, i) => {
+    ${timelineItems().map(({ b, i, e }) => {
+      if (e) return `<li class="tl event ${e.done ? 'done' : ''}" style="--c:${AREAS[e.area]?.color || '#999'}">
+        <span class="t">${e.start_time || '종일'}</span>
+        <span class="ttl">📌 ${esc(e.title)} <i class="evtag">일정</i>${e.end_time ? ` <small class="muted">~${e.end_time}</small>` : ''}${e.memo ? `<small class="muted evmemo">${esc(e.memo)}</small>` : ''}</span>
+        <span class="st">
+          <button data-act="evtoggle" data-id="${e.id}" class="${e.done ? 'on' : ''}" title="완료">✓</button>
+          <button data-act="evedit" data-id="${e.id}" title="수정">✎</button>
+        </span></li>`;
       const past = isToday && toMin(b.end) <= m;
       const cur = isToday && toMin(b.start) <= m && m < toMin(b.end);
       return `<li class="tl ${b.status} ${past && !b.status ? 'needs' : ''} ${cur ? 'cur' : ''}" style="--c:${AREAS[b.area]?.color}">
@@ -672,6 +697,7 @@ function doView() {
         </span></li>`;
     }).join('')}
     </ol>
+    <div class="btnrow"><button class="sm" data-act="evnew" data-d="${S.date}">+ 일정 추가</button></div>
   </section>
 
   <section class="card">
@@ -933,6 +959,8 @@ function settingsView() {
       <button class="ghost" data-act="applytpl">오늘 블록에 다시 적용</button></div>
   </section>
 
+  ${notifySettings()}
+
   ${workSettings()}
 
   <section class="card">
@@ -971,11 +999,9 @@ function settingsView() {
   </section>` : ''}
 
   <section class="card">
-    <h3>🔗 연결 앱 · 리뷰 시간</h3>
+    <h3>🔗 연결 앱</h3>
     <div class="row"><span class="w8">런닝 캘린더</span><input data-bind="profile.links.runningApp" value="${esc(p.links.runningApp)}" class="grow" /></div>
     <div class="row"><span class="w8">독서앱</span><input data-bind="profile.links.readingApp" value="${esc(p.links.readingApp)}" class="grow" /></div>
-    <div class="row"><span class="w8">하루 리뷰 시각</span><input type="time" data-bind="profile.reviewTime" value="${esc(p.reviewTime)}" /></div>
-    <div class="btnrow"><button data-act="notifyperm">알림 허용 (앱이 열려 있을 때 타이머·리뷰 알림)</button></div>
   </section>
 
   <section class="card help">
@@ -987,6 +1013,309 @@ function settingsView() {
       <li><b>See</b> (21:30, 10분): 자동 점수 보고 Keep/Problem/Try 작성 → 내일 계획으로 연결.</li>
       <li>일요일: 주간 See에서 7일 데이터 보고 다음 주 3대 영역 목표 정하기.</li>
     </ol>
+  </section>`;
+}
+
+/* ================= 일정 (이벤트) ================= */
+const REMINDS = [['none', '알림 없음'], ['0', '정각'], ['10', '10분 전'], ['30', '30분 전'], ['60', '1시간 전'], ['1440', '하루 전'], ['eve', '전날 21시']];
+const remindLabel = r => (REMINDS.find(x => x[0] === String(r)) || [, ''])[1];
+const remOpts = sel => REMINDS.map(([k, l]) => `<option value="${k}" ${k === String(sel) ? 'selected' : ''}>${l}</option>`).join('');
+/** 알림 시각(ISO). 종일 일정은 '종일 기준 시각'(기본 09:00)에서 계산 */
+function remindAt(ev) {
+  if (!ev.date || !ev.remind || ev.remind === 'none') return null;
+  const [y, m, d] = ev.date.split('-').map(Number);
+  if (ev.remind === 'eve') return new Date(y, m - 1, d - 1, 21, 0).toISOString();
+  const [h, mi] = (ev.start_time || S.profile.notify.allDayTime || '09:00').split(':').map(Number);
+  return new Date(y, m - 1, d, h, mi - Number(ev.remind)).toISOString();
+}
+const evTime = e => e.start_time ? e.start_time + (e.end_time ? '–' + e.end_time : '') : '종일';
+const evSort = (a, b) => a.date.localeCompare(b.date) || (a.start_time || '').localeCompare(b.start_time || '') || a.title.localeCompare(b.title);
+function eventsOn(date) { return S.events.filter(e => e.date === date).sort(evSort); }
+function relDay(date) {
+  const n = Math.round((parse(date) - parse(today())) / 864e5);
+  if (n === 0) return '오늘'; if (n === 1) return '내일'; if (n === 2) return '모레'; if (n === -1) return '어제';
+  const d = parse(date); return `${d.getMonth() + 1}/${d.getDate()}(${DOW[d.getDay()]})`;
+}
+/** 불러올 범위: 보고 있는 달 + 그 주 + 오늘~7일 */
+function evRange() {
+  const { first, last } = monthBounds(S.date); const ws = weekStart(S.date); const t = today();
+  return { from: [first, ws, t].sort()[0], to: [last, addDays(ws, 6), addDays(t, 7)].sort()[2] };
+}
+async function loadEvents(force) {
+  const { from, to } = evRange(); const key = from + '|' + to;
+  if (!force && S.evKey === key) return;
+  try { S.events = await db.listEvents(from, to); S.evKey = key; } catch (e) { S.evErr = e.message || String(e); }
+}
+function evItem(e, withDate) {
+  return `<li class="evi ${e.done ? 'done' : ''}" style="--c:${AREAS[e.area]?.color || '#999'}">
+    <input type="checkbox" data-act="evdone" data-id="${e.id}" ${e.done ? 'checked' : ''} title="완료" aria-label="${esc(e.title)} 완료" />
+    <button class="evbody" data-act="evedit" data-id="${e.id}" title="눌러서 수정·삭제">
+      <span class="evt">${withDate ? `<b>${relDay(e.date)}</b> ` : ''}${evTime(e)}</span>
+      <span class="evn">${esc(e.title)}</span>
+      ${e.remind && e.remind !== 'none' ? `<span class="evr">🔔${remindLabel(e.remind)}</span>` : ''}
+      ${e.memo ? `<small class="evm">${esc(e.memo)}</small>` : ''}
+    </button></li>`;
+}
+function evList(list, { empty = '', withDate = false } = {}) {
+  return list.length ? `<ul class="evlist">${list.map(e => evItem(e, withDate)).join('')}</ul>` : `<p class="muted small">${empty}</p>`;
+}
+function upcomingCard() {
+  const t = today(); const end = addDays(t, 7);
+  const list = S.events.filter(e => e.date >= t && e.date <= end && !e.done).sort(evSort);
+  return `<section class="card upcoming"><div class="ahead"><h3>📌 다가오는 일정 <small>오늘~7일</small></h3>
+      <button class="sm primary" data-act="evnew" data-d="${S.date}">+ 일정 추가</button></div>
+    ${evList(list.slice(0, 6), { withDate: true, empty: '7일 안에 잡힌 일정이 없어요. 병원·모임·마감 같은 일정을 넣어 두면 알림으로 알려드려요.' })}
+    ${list.length > 6 ? `<p class="muted small">외 ${list.length - 6}개 · 달력에서 날짜를 누르면 그날 일정이 보여요</p>` : ''}
+  </section>`;
+}
+function dayEventsBlock(date) {
+  const list = eventsOn(date);
+  return `<div class="dayev"><div class="ahead"><b>📌 ${date === today() ? '오늘' : fmtDate(date)} 일정${list.length ? ` ${list.length}개` : ''}</b>
+      <button class="sm" data-act="evnew" data-d="${date}">+ 일정</button></div>
+    ${evList(list, { empty: '일정 없음 · 달력에서 날짜를 누르면 그날 일정이 여기 보여요' })}</div>`;
+}
+/** Do 타임라인: 블록 + 일정을 시간순으로 (종일 일정은 맨 위) */
+function timelineItems() {
+  const items = S.day.blocks.map((b, i) => ({ b, i, t: toMin(b.start) }));
+  for (const e of eventsOn(S.date)) items.push({ e, t: e.start_time ? toMin(e.start_time) - 0.5 : -1 });
+  return items.sort((x, y) => x.t - y.t);
+}
+
+/* ---------- 일정 모달 (prompt/confirm 대신 폼) ---------- */
+function openEvent(ev, date) {
+  if (!ev && ev !== null) return;
+  const n = S.profile.notify;
+  S.modal = { type: 'event', ev: ev ? { ...ev } : { id: null, date: date || S.date, start_time: null, end_time: null, title: '', area: 'life', memo: '', remind: n.eventDefault || 'none', done: false } };
+  render(); setTimeout(() => $('#ev-title')?.focus(), 30);
+}
+function readEvForm() {
+  if (S.modal?.type !== 'event' || !$('#ev-title')) return;
+  const e = S.modal.ev;
+  Object.assign(e, { title: $('#ev-title').value, date: $('#ev-date').value, start_time: $('#ev-start').value || null, end_time: $('#ev-end').value || null,
+    area: $('#ev-area').value, remind: $('#ev-remind').value, memo: $('#ev-memo').value });
+  if ($('#ev-done')) e.done = $('#ev-done').checked;
+}
+function remindText(ev) {
+  const ra = remindAt(ev); if (!ra) return '알림 없음';
+  const d = new Date(ra);
+  return `알림: ${relDay(ymd(d))} ${pad(d.getHours())}:${pad(d.getMinutes())}${!ev.start_time && ev.remind !== 'eve' ? ' (종일 일정 기준 ' + (S.profile.notify.allDayTime || '09:00') + ')' : ''}${d < new Date() ? ' · 이미 지난 시각이라 오지 않아요' : ''}`;
+}
+function updateRemindHint() { if (S.modal?.type !== 'event') return; readEvForm(); const el = $('#ev-hint'); if (el) el.textContent = remindText(S.modal.ev); }
+function modalView() {
+  const m = S.modal; if (!m || m.type !== 'event') return '';
+  const e = m.ev;
+  return `<div class="modal" data-act="modalbg"><div class="mbox" role="dialog" aria-modal="true" aria-label="${e.id ? '일정 수정' : '일정 추가'}">
+    <div class="ahead"><h3>${e.id ? '✎ 일정 수정' : '📌 일정 추가'}</h3><button class="icon" data-act="modalclose" aria-label="닫기">✕</button></div>
+    <label class="lbl" for="ev-title">제목</label>
+    <input id="ev-title" value="${esc(e.title)}" placeholder="예: 치과 예약, 북클럽 모임, 전자책 마감" maxlength="120" />
+    <div class="g2">
+      <div><label class="lbl" for="ev-date">날짜</label><input type="date" id="ev-date" value="${esc(e.date)}" /></div>
+      <div><label class="lbl" for="ev-area">영역</label><select id="ev-area">${areaOpts(e.area)}</select></div>
+      <div><label class="lbl" for="ev-start">시작 <small>(비우면 종일)</small></label><input type="time" id="ev-start" value="${e.start_time || ''}" /></div>
+      <div><label class="lbl" for="ev-end">끝 <small>(선택)</small></label><input type="time" id="ev-end" value="${e.end_time || ''}" /></div>
+    </div>
+    <label class="lbl" for="ev-remind">알림</label>
+    <select id="ev-remind">${remOpts(e.remind)}</select>
+    <p class="muted small" id="ev-hint">${remindText(e)}</p>
+    <label class="lbl" for="ev-memo">메모</label>
+    <textarea id="ev-memo" rows="2" placeholder="장소, 준비물 등">${esc(e.memo)}</textarea>
+    ${e.id ? `<label class="goalchk"><input type="checkbox" id="ev-done" ${e.done ? 'checked' : ''} /> 완료한 일정</label>` : ''}
+    ${m.msg ? `<p class="warn small">${esc(m.msg)}</p>` : ''}
+    <div class="btnrow">
+      <button class="primary" data-act="evsave">${e.id ? '저장' : '추가'}</button>
+      <button data-act="modalclose">취소</button>
+      ${e.id ? (m.confirmDel ? `<button class="danger" data-act="evdelok">정말 삭제</button>` : `<button class="ghost" data-act="evdel">삭제</button>`) : ''}
+    </div>
+  </div></div>`;
+}
+async function saveEventForm() {
+  readEvForm(); const m = S.modal; if (!m || m.busy) return; const e = m.ev;
+  const err = !e.title.trim() ? '제목을 입력하세요' : !e.date ? '날짜를 고르세요'
+    : e.end_time && !e.start_time ? '끝 시간만 넣을 수는 없어요 (시작 시간도 입력)'
+    : e.start_time && e.end_time && e.end_time < e.start_time ? '끝 시간이 시작보다 빨라요' : '';
+  if (err) { m.msg = err; render(); return; }
+  m.busy = true;
+  const old = S.events.find(x => x.id === e.id);
+  const ra = remindAt(e);
+  const same = old && (old.remind_at ? Date.parse(old.remind_at) : null) === (ra ? Date.parse(ra) : null);
+  const row = { ...e, title: e.title.trim(), remind_at: ra, reminded_at: same ? old.reminded_at : null };
+  try {
+    const saved = await db.saveEvent(row);
+    S.events = S.events.filter(x => x.id !== saved.id).concat(saved);
+    S.modal = null;
+    toast(old ? '일정을 고쳤어요' : `일정 추가: ${relDay(saved.date)} ${saved.title}`);
+  } catch (er) { m.busy = false; m.msg = '저장 실패: ' + (er.message || er); }
+  render();
+}
+async function deleteEventNow() {
+  const e = S.modal?.ev; if (!e?.id) return;
+  try { await db.deleteEvent(e.id); S.events = S.events.filter(x => x.id !== e.id); S.modal = null; toast('일정을 삭제했어요'); }
+  catch (er) { S.modal.msg = '삭제 실패: ' + (er.message || er); }
+  render();
+}
+async function setEventDone(id, done) {
+  const e = S.events.find(x => x.id === id); if (!e) return;
+  e.done = done; render();
+  try { Object.assign(e, await db.saveEvent(e)); } catch (er) { e.done = !done; toast('저장 실패: ' + (er.message || er)); render(); }
+}
+
+/* ================= 알림 (웹푸시 + 앱이 열려 있을 때) ================= */
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const urlB64 = s => { const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from([...b].map(c => c.charCodeAt(0))); };
+
+/** 하루치 루틴 알림(블록 시작 · 아침 Plan · 하루 리뷰). key 는 서버 큐와 앱 내 알림이 같이 써서 중복을 막는다 */
+function routineItemsFor(dt, doc) {
+  const n = S.profile.notify; const out = [];
+  const at = (hm, minus = 0) => { const [y, m, d] = dt.split('-').map(Number); const [h, mi] = hm.split(':').map(Number); return new Date(y, m - 1, d, h, mi - minus).toISOString(); };
+  if (n.blockOn && n.blockAreas?.length) {
+    let blocks;
+    if (doc) { const dd = normDay(doc, dt); syncWork(dd, dt); blocks = dd.blocks; } else blocks = blocksFor(dt, S.profile.template);
+    const lead = Number(n.blockLead) || 0;
+    for (const b of blocks) {
+      if (!n.blockAreas.includes(b.area) || b.status || !b.start) continue;
+      out.push({ key: `b:${dt}:${b.tid || b.id}:${b.start}:${lead}`, kind: 'block', date: dt, fire_at: at(b.start, lead),
+        title: `⏰ ${b.title}`, body: `${b.start}–${b.end}${lead ? ` · ${lead}분 뒤 시작` : ' 시작'}${b.note ? ' · ' + b.note : ''}`, url: `./?tab=do&date=${dt}` });
+    }
+  }
+  if (n.planOn && n.planTime) out.push({ key: `p:${dt}:${n.planTime}`, kind: 'plan', date: dt, fire_at: at(n.planTime),
+    title: '☀️ 오늘의 Plan', body: '핵심 3 정하고 오늘 블록·일정 확인하기', url: `./?tab=plan&date=${dt}` });
+  if (n.reviewOn && S.profile.reviewTime) out.push({ key: `r:${dt}:${S.profile.reviewTime}`, kind: 'review', date: dt, fire_at: at(S.profile.reviewTime),
+    title: '🌙 하루 리뷰 시간', body: '10분 See: 점수 보고 Keep/Problem/Try', url: `./?tab=see&date=${dt}` });
+  return out;
+}
+let pushTimer = null;
+function schedulePushSync() { clearTimeout(pushTimer); pushTimer = setTimeout(() => syncPushQueue(), 2000); }
+/** 앞으로 14일 루틴 알림을 서버 큐(pds_push_queue)에 다시 만든다. 서버가 1분마다 시각 된 것을 푸시 */
+async function syncPushQueue() {
+  if (!db.isCloud || !S.user || !S.profile?.notify?.push) return;
+  try {
+    const t = today(); const end = addDays(t, 13);
+    const rows = await db.listDays(t, end); const map = Object.fromEntries(rows.map(r => [r.date, r.data]));
+    if (S.day && S.date >= t && S.date <= end) map[S.date] = S.day;
+    const soon = Date.now() + 30000; const items = [];
+    for (let dt = t; dt <= end; dt = addDays(dt, 1)) for (const it of routineItemsFor(dt, map[dt] || null)) if (Date.parse(it.fire_at) > soon) items.push(it);
+    await db.replacePushQueue(items);
+    S.push.pending = items.length; S.push.syncedAt = Date.now();
+  } catch (e) { S.push.msg = '알림 예약 실패: ' + (e.message || e); }
+  updatePushStateDom();
+}
+/** 앱이 열려 있을 때(15초마다): 시각 된 일정·오늘 루틴 알림. 웹푸시가 안 되는 기기의 대체 경로 */
+const NKEY = 'pds-notified';
+function localNotifyTick() {
+  const nowMs = Date.now(); const WIN = 120000;
+  let seen; try { seen = JSON.parse(localStorage.getItem(NKEY)) || {}; } catch { seen = {}; }
+  const due = [];
+  for (const e of S.events) {
+    if (e.done || !e.remind_at) continue;
+    const t = Date.parse(e.remind_at);
+    if (t <= nowMs && nowMs - t < WIN) due.push({ key: 'ev:' + e.id, title: '📌 ' + e.title, body: `${relDay(e.date)} ${evTime(e)}${e.memo ? ' · ' + e.memo : ''}` });
+  }
+  if (S.date === today() && S.day) for (const it of routineItemsFor(S.date, S.day)) {
+    const t = Date.parse(it.fire_at);
+    if (t > nowMs || nowMs - t >= WIN) continue;
+    if (it.kind === 'review' && S.day.review?.at) continue;
+    if (it.kind === 'plan' && S.day.top3.every(x => x.text.trim())) continue;
+    due.push(it);
+  }
+  let changed = false;
+  for (const d of due) if (!seen[d.key]) { seen[d.key] = nowMs; changed = true; notify(d.title, d.body, d.key); }
+  if (changed) {
+    for (const k of Object.keys(seen)) if (nowMs - seen[k] > 2 * 864e5) delete seen[k];
+    localStorage.setItem(NKEY, JSON.stringify(seen));
+  }
+}
+function pushStateHtml() {
+  const P = S.push;
+  const sup = typeof Notification !== 'undefined' && 'serviceWorker' in navigator;
+  const pushSup = sup && 'PushManager' in window;
+  const perm = sup ? Notification.permission : 'unsupported';
+  const st = !sup ? `❌ 이 브라우저는 알림을 지원하지 않아요${isIOS() && !isStandalone() ? ' — 아이폰은 홈 화면에 추가한 앱에서 켜주세요' : ''}`
+    : perm === 'denied' ? '🚫 알림이 차단돼 있어요. 브라우저(또는 폰) 설정에서 이 사이트 알림을 허용해 주세요.'
+    : P.sub ? '✅ 이 기기: 푸시 알림 켜짐 (앱을 닫아도 와요)'
+    : perm === 'granted' ? (pushSup && db.isCloud ? '🟡 알림 권한은 있지만 푸시 등록 전이에요 — 아래 버튼을 눌러 주세요' : '🟡 앱이 열려 있을 때만 알림이 와요')
+    : '⚪ 이 기기: 알림 꺼짐';
+  const evN = S.events.filter(e => e.remind_at && !e.reminded_at && !e.done && Date.parse(e.remind_at) > Date.now()).length;
+  const meta = [P.devices != null ? `알림 받는 기기 ${P.devices}대` : '', P.pending != null && S.profile.notify.push ? `예약된 루틴 알림 ${P.pending}개(14일)` : '', evN ? `일정 알림 ${evN}개 대기` : ''].filter(Boolean).join(' · ');
+  return `<p class="pushst"><b>${st}</b></p>${meta ? `<p class="muted small">${meta}</p>` : ''}${P.msg ? `<p class="small warn">${esc(P.msg)}</p>` : ''}
+    <div class="btnrow">${P.sub ? `<button data-act="pushtest">테스트 알림 보내기</button><button class="ghost" data-act="pushoff">이 기기 알림 끄기</button>`
+      : `<button class="primary" data-act="pushon" ${!sup || perm === 'denied' ? 'disabled' : ''}>🔔 이 기기에서 알림 켜기</button>`}</div>`;
+}
+function updatePushStateDom() { const el = $('#pushstate'); if (el) el.innerHTML = pushStateHtml(); }
+async function refreshPushState() {
+  if (S.push.busy || Date.now() - (S.push.checkedAt || 0) < 5000) { updatePushStateDom(); return; }
+  S.push.busy = true;
+  try {
+    const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    const sub = reg?.pushManager ? await reg.pushManager.getSubscription().catch(() => null) : null;
+    S.push.sub = !!sub;
+    if (db.isCloud) {
+      if (sub) await db.savePushSub(sub.toJSON(), navigator.userAgent).catch(() => { }); // 다른 계정으로 로그인한 경우 등 재등록
+      S.push.devices = await db.countPushSubs().catch(() => null);
+      if (S.profile.notify.push) S.push.pending = await db.pendingPushCount().catch(() => S.push.pending);
+    }
+    S.push.checkedAt = Date.now();
+  } finally { S.push.busy = false; }
+  updatePushStateDom();
+}
+async function enablePush() {
+  S.push.msg = '';
+  try {
+    if (typeof Notification === 'undefined' || !('serviceWorker' in navigator))
+      throw new Error(isIOS() ? '아이폰은 Safari 공유 → 홈 화면에 추가한 앱으로 열어야 알림을 켜 수 있어요.' : '이 브라우저는 알림을 지원하지 않아요.');
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error(perm === 'denied' ? '알림이 차단됐어요. 브라우저(또는 폰) 설정에서 이 사이트 알림을 허용해 주세요.' : '알림 권한을 허용하지 않았어요.');
+    const reg = await navigator.serviceWorker.ready;
+    if (!reg.pushManager || !db.isCloud) { S.push.msg = '이 기기는 백그라운드 푸시를 지원하지 않아 앱이 열려 있을 때만 알림이 와요.'; toast('알림 허용됨 (앱이 열려 있을 때)'); render(); return; }
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(VAPID_PUBLIC_KEY) });
+    await db.savePushSub(sub.toJSON(), navigator.userAgent);
+    S.profile.notify.push = true; markDirty('profile'); await flush();
+    S.push.sub = true; S.push.checkedAt = 0;
+    await syncPushQueue();
+    toast('이 기기에서 알림을 켰어요 🔔 — 테스트 알림으로 확인해 보세요');
+  } catch (e) { S.push.msg = e.message || String(e); }
+  render();
+}
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration(); const sub = await reg?.pushManager?.getSubscription();
+    if (sub) { await db.deletePushSub(sub.endpoint).catch(() => { }); await sub.unsubscribe().catch(() => { }); }
+    const left = await db.countPushSubs().catch(() => 0);
+    if (!left) { S.profile.notify.push = false; markDirty('profile'); await db.replacePushQueue([]).catch(() => { }); S.push.pending = 0; }
+    S.push.sub = false; S.push.checkedAt = 0; S.push.msg = ''; toast('이 기기 알림을 껏어요');
+  } catch (e) { S.push.msg = e.message || String(e); }
+  render();
+}
+async function testPush() {
+  try {
+    const r = await db.sendTestPush();
+    S.push.msg = r.ok ? '' : '테스트 알림을 보내지 못했어요: ' + ((r.errors || []).join(', ') || '등록된 기기 없음');
+    if (r.ok) toast(`테스트 알림을 보냈어요 (${r.ok}/${r.devices}대) — 몇 초 안에 와요`);
+  } catch (e) { S.push.msg = '테스트 실패: ' + (e.message || e); }
+  updatePushStateDom();
+}
+function blockPreview() {
+  const n = S.profile.notify;
+  const bl = S.day.blocks.filter(b => n.blockAreas.includes(b.area));
+  return bl.length ? `${S.date === today() ? '오늘' : fmtDate(S.date)}: ${bl.map(b => `${b.start} ${esc(b.title)}`).join(', ')}` : '이 날은 해당 블록이 없어요.';
+}
+function notifySettings() {
+  const p = S.profile; const n = p.notify;
+  return `<section class="card" id="notifycard">
+    <h3>🔔 알림</h3>
+    <div id="pushstate">${pushStateHtml()}</div>
+    <p class="muted small iosnote">📱 <b>아이폰·아이패드</b>는 Safari에서 <b>공유 → 홈 화면에 추가</b>로 설치한 앱에서만 푸시 알림이 와요(iOS 16.4 이상). 설치한 앱을 열고 여기서 '이 기기에서 알림 켜기'를 누르세요. 안드로이드·PC 크롬은 브라우저에서 바로 켤 수 있고, 기기마다 한 번씩 켜야 해요.</p>
+    <div class="nrow"><span class="grow">새 일정 기본 알림</span><select data-bind="profile.notify.eventDefault" class="w10">${remOpts(n.eventDefault)}</select></div>
+    <div class="nrow"><span class="grow">종일 일정 기준 시각 <small class="muted">(정각·N분 전 계산)</small></span><input type="time" data-bind="profile.notify.allDayTime" value="${esc(n.allDayTime)}" /></div>
+    <div class="nrow"><label class="grow"><input type="checkbox" data-bind="profile.notify.blockOn" ${n.blockOn ? 'checked' : ''} /> 블록 시작 알림</label>
+      <select data-bind="profile.notify.blockLead" class="w10" ${n.blockOn ? '' : 'disabled'}>${[['0', '정각'], ['5', '5분 전'], ['10', '10분 전'], ['15', '15분 전']].map(([k, l]) => `<option value="${k}" ${k === String(n.blockLead) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    ${n.blockOn ? `<div class="row chips">${Object.entries(AREAS).map(([k, v]) => `<button class="chip ${n.blockAreas.includes(k) ? 'on' : ''}" data-act="nfarea" data-a="${k}">${v.label}</button>`).join('')}</div>
+      <p class="muted small">켜 둔 영역의 블록만 알려요 (런닝·사업=글쓰기 골든타임·독서가 기본). ${blockPreview()}</p>` : ''}
+    <div class="nrow"><label class="grow"><input type="checkbox" data-bind="profile.notify.planOn" ${n.planOn ? 'checked' : ''} /> 아침 Plan 알림</label><input type="time" data-bind="profile.notify.planTime" value="${esc(n.planTime)}" ${n.planOn ? '' : 'disabled'} /></div>
+    <div class="nrow"><label class="grow"><input type="checkbox" data-bind="profile.notify.reviewOn" ${n.reviewOn ? 'checked' : ''} /> 하루 리뷰 알림</label><input type="time" data-bind="profile.reviewTime" value="${esc(p.reviewTime)}" ${n.reviewOn ? '' : 'disabled'} /></div>
+    <div class="nrow"><label class="grow"><input type="checkbox" data-bind="profile.notify.focusOn" ${n.focusOn ? 'checked' : ''} /> 집중 타이머 종료 알림</label></div>
+    <p class="muted small">리뷰를 이미 쓴 날은 리뷰 알림을 보내지 않아요. 설정·블록을 바꾸면 앞으로 14일 알림 예약이 자동으로 다시 만들어져요(앱을 열 때마다 갱신). 일정 알림은 일정마다 따로 고를 수 있어요.</p>
   </section>`;
 }
 
@@ -1012,8 +1341,15 @@ function startFocus(i) {
   const left = toMin(b.end) - nowMin();
   const def = S.date === today() && left > 0 ? left : toMin(b.end) - toMin(b.start);
   const min = Math.max(1, Math.min(def, 50));
-  localStorage.setItem(FKEY, JSON.stringify({ date: S.date, i, blockId: b.id, title: b.title, blockEnd: b.end, end: Date.now() + min * 60000, min, start: Date.now() }));
+  const f = { date: S.date, i, blockId: b.id, title: b.title, blockEnd: b.end, end: Date.now() + min * 60000, min, start: Date.now() };
+  localStorage.setItem(FKEY, JSON.stringify(f));
+  queueFocusPush(f);
   render();
+}
+/** 집중 타이머 종료를 서버에도 예약 → 화면이 꺼져 있어도 웹푸시로 알림 */
+function queueFocusPush(f) {
+  if (!db.isCloud || !S.profile.notify.push || !S.profile.notify.focusOn) return;
+  db.queuePush({ key: 'f:' + f.start, kind: 'focus', date: f.date, fire_at: new Date(f.end).toISOString(), title: '⏳ 집중 시간 끝', body: f.title + ' — 완료로 기록할까요?', url: './?tab=do' }).catch(() => { });
 }
 function setFocusLen(m) {
   const f = getFocus(); if (!f) return;
@@ -1021,10 +1357,11 @@ function setFocusLen(m) {
   if (m === 'end') { const e = new Date(); e.setHours(...f.blockEnd.split(':').map(Number), 0, 0); min = Math.max(1, Math.round((e - f.start) / 60000)); }
   else min = Number(m);
   Object.assign(f, { min, end: f.start + min * 60000, notified: false });
-  localStorage.setItem(FKEY, JSON.stringify(f)); render();
+  localStorage.setItem(FKEY, JSON.stringify(f)); queueFocusPush(f); render();
 }
 async function endFocus(done) {
   const f = getFocus(); localStorage.removeItem(FKEY);
+  if (f && db.isCloud && f.end > Date.now()) db.unqueuePush('f:' + f.start).catch(() => { });
   if (done && f) {
     if (f.date !== S.date) await loadDate(f.date);
     const b = S.day.blocks.find(x => x.id === f.blockId);
@@ -1041,14 +1378,19 @@ setInterval(() => {
     el.textContent = `${pad(Math.floor(left / 60))}:${pad(left % 60)}`;
     if (left === 0 && !f.notified) {
       f.notified = true; localStorage.setItem(FKEY, JSON.stringify(f));
-      notify('집중 시간 끝', f.title + ' — 완료로 기록할까요?');
+      if (S.profile?.notify?.focusOn !== false) notify('⏳ 집중 시간 끝', f.title + ' — 완료로 기록할까요?', 'f:' + f.start);
       navigator.vibrate?.([200, 100, 200]);
     }
   }
 }, 1000);
-function notify(title, body) {
-  toast(`${title}: ${body}`, 5000);
-  try { if (Notification.permission === 'granted') new Notification(title, { body, icon: 'icon-192.png' }); } catch { }
+/** 앱이 열려 있을 때 알림: 토스트 + 시스템 알림(서비스워커 showNotification 우선, 안드로이드는 이것만 됨).
+ *  웹푸시와 같은 tag 를 써서 둘 다 와도 알림은 하나만 남는다. */
+async function notify(title, body, tag) {
+  toast(`${title}: ${body}`, 6000);
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const opt = { body, tag: tag || undefined, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: './' } };
+  try { const reg = await navigator.serviceWorker?.getRegistration(); if (reg) { await reg.showNotification(title, opt); return; } } catch { }
+  try { new Notification(title, opt); } catch { }
 }
 // 매 분: '지금' 카드 갱신 + 리뷰 시각 알림
 let lastMinute = -1;
@@ -1057,9 +1399,9 @@ setInterval(() => {
   const m = nowMin(); if (m === lastMinute) return; lastMinute = m;
   const a = document.activeElement;
   const typing = a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName);
-  if (S.date === today() && (S.tab === 'do' || S.tab === 'home') && !typing && !getFocus()) render();
-  if (m === toMin(S.profile.reviewTime || '21:30') && !S.day?.review?.at) notify('하루 리뷰 시간', '10분 See: 점수 보고 Keep/Problem/Try');
+  if (S.date === today() && (S.tab === 'do' || S.tab === 'home') && !typing && !getFocus() && !S.modal) render();
 }, 15000);
+setInterval(() => { if (S.user && S.profile) localNotifyTick(); }, 15000);
 
 /* ================= events ================= */
 function setPath(path, value) {
@@ -1074,6 +1416,7 @@ document.addEventListener('input', e => {
   const el = e.target; const path = el.dataset?.bind; if (!path) return;
   let v = el.value;
   if (el.type === 'number') v = v === '' ? 0 : Number(v);
+  if (el.type === 'checkbox') v = el.checked;
   const root = setPath(path, v);
   if (el.dataset.track) { S.day.reading[el.dataset.track] = true; markDirty('day'); }
   markDirty(root);
@@ -1083,7 +1426,8 @@ document.addEventListener('change', e => {
   if (el.id === 'datepick' && el.value) { loadDate(el.value); return; }
   if (el.id === 'importfile' && el.files[0]) { importFile(el.files[0]); return; }
   // 영역/요일처럼 색이 바뀌는 항목은 다시 그리기
-  if (el.dataset?.bind && (el.tagName === 'SELECT' || el.dataset.track)) render();
+  if (el.dataset?.bind && (el.tagName === 'SELECT' || el.dataset.track || el.type === 'checkbox')) render();
+  if (el.id?.startsWith('ev-')) updateRemindHint();
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'newtask') { e.preventDefault(); act('addtask'); }
@@ -1091,9 +1435,12 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.dataset?.ph) { e.preventDefault(); act('addtaskph', { ph: e.target.dataset.ph }); }
   if (e.key === 'Enter' && e.target.id === 'bookadd') { e.preventDefault(); act('addbook'); }
   if (e.key === 'Enter' && e.target.closest?.('#loginform')) { e.preventDefault(); act('login'); }
+  if (e.key === 'Enter' && e.target.closest?.('.mbox') && e.target.tagName === 'INPUT') { e.preventDefault(); act('evsave'); }
+  if (e.key === 'Escape' && S.modal) { S.modal = null; render(); }
 });
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
+  if (el.dataset.act === 'modalbg' && e.target !== el) return; // 모달 안쪽 클릭은 닫지 않음
   if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.classList.contains('banner')) e.preventDefault?.();
   if (el.type === 'checkbox') { /* 체크박스는 기본 동작 유지 */ }
   act(el.dataset.act, el.dataset, el);
@@ -1196,9 +1543,20 @@ async function act(a, ds = {}, el) {
     case 'applytpl': if (confirm(`${fmtDate(S.date)} 블록을 현재 템플릿으로 다시 만들까요?`)) { d.blocks = blocksFor(S.date, p.template); markDirty('day'); toast('적용했어요'); } break;
     case 'addbook': { const v = $('#bookadd')?.value.trim(); if (!v) break; p.books.push({ id: uid(), title: v, track: '직접 추가', date: S.date }); markDirty('profile'); render(); break; }
     case 'delbook': p.books = p.books.filter(b => b.id !== ds.id); markDirty('profile'); render(); break;
-    case 'notifyperm':
-      try { const r = await Notification.requestPermission(); toast(r === 'granted' ? '알림 허용됨' : '알림이 허용되지 않았어요'); } catch { toast('이 브라우저는 알림을 지원하지 않아요'); }
-      break;
+    // 일정
+    case 'evnew': openEvent(null, ds.d || S.date); break;
+    case 'evedit': openEvent(S.events.find(x => x.id === ds.id)); break;
+    case 'evsave': await saveEventForm(); break;
+    case 'evdel': readEvForm(); S.modal.confirmDel = true; render(); break;
+    case 'evdelok': await deleteEventNow(); break;
+    case 'evdone': await setEventDone(ds.id, el.checked); break;
+    case 'evtoggle': { const e = S.events.find(x => x.id === ds.id); if (e) await setEventDone(e.id, !e.done); break; }
+    case 'modalclose': case 'modalbg': S.modal = null; render(); break;
+    // 알림
+    case 'pushon': await enablePush(); break;
+    case 'pushoff': await disablePush(); break;
+    case 'pushtest': await testPush(); break;
+    case 'nfarea': { const n = p.notify; n.blockAreas = n.blockAreas.includes(ds.a) ? n.blockAreas.filter(x => x !== ds.a) : [...n.blockAreas, ds.a]; markDirty('profile'); render(); break; }
     case 'export': {
       await flush();
       const j = await db.exportAll();
@@ -1273,8 +1631,20 @@ async function boot() {
   S.raceFromCal = cal;
   S.race = cal ? { name: cal.name, date: cal.date, goal: cal.goal_time || S.profile.race.goal } : (S.profile.race?.date ? S.profile.race : null);
   if (!(await db.getProfile())) await db.saveProfile(S.profile);
-  await loadDate(today());
+  // 알림에서 열면 ?tab=do&date=YYYY-MM-DD
+  const q = new URLSearchParams(location.search);
+  if (['home', 'plan', 'do', 'see', 'set'].includes(q.get('tab'))) S.tab = q.get('tab');
+  const qd = /^\d{4}-\d{2}-\d{2}$/.test(q.get('date') || '') ? q.get('date') : today();
+  if (q.has('tab') || q.has('date')) history.replaceState(null, '', location.pathname);
+  await loadDate(qd);
+  refreshPushState().then(() => syncPushQueue());
 }
+navigator.serviceWorker?.addEventListener('message', async e => {
+  if (e.data?.type !== 'open' || !S.user) return;
+  const u = new URL(e.data.url); const tab = u.searchParams.get('tab'); const dt = u.searchParams.get('date');
+  if (tab) S.tab = tab;
+  if (dt && dt !== S.date) await loadDate(dt); else render();
+});
 db.init();
 db.initReading();
 db.onAuth(async (ev) => {
