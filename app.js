@@ -382,8 +382,12 @@ function readArea() {
         <span class="tn">${esc(t.name)}</span><span class="bk ellipsis">${tb.title ? esc(tb.title) : `<span class="muted" ${tb.finished ? `title="완독: ${esc(tb.finished)}"` : ''}>${tb.finished ? '다음 책 미정' : '책 미정'}</span>`}</span>
         <span class="pc">${tb.total ? Math.round(pr * 100) + '%' : ''}</span></li>`;
     }).join('')}</ul>
-    ${loose.length ? `<p class="muted small">트랙 미지정: ${loose.map(b => esc(b.title)).join(', ')} · <a href="#" data-act="gotab" data-tab="plan">Plan에서 지정</a></p>` : ''}
-    ${readingStatusLine()}
+    ${loose.length ? `<p class="muted small">트랙 미지정: ${loose.map(b => esc(b.title)).join(', ')}</p>` : ''}
+    <div class="btnrow areabtns">
+      ${loose.length ? `<button class="sm" data-act="gotab" data-tab="plan">📋 Plan에서 트랙 지정</button>` : ''}
+      ${S.reading ? `<button class="sm" data-act="openurl" data-url="${esc(p.links.readingApp)}">📖 독서앱 열기 ↗</button>` : db.hasReading ? `<button class="sm" data-act="gotab" data-tab="set">🔗 독서앱 연결하기</button>` : ''}
+    </div>
+    ${S.reading ? '<p class="muted small">🔗 독서앱 연동됨</p>' : ''}
   </section>`;
 }
 function snsArea(map, days) {
