@@ -17,10 +17,14 @@ self.addEventListener('fetch', e => {
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data && e.data.text() }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'PDS 플래너', {
-    body: d.body || '', icon: 'icon-192.png', badge: 'icon-192.png', tag: d.tag || undefined,
-    data: { url: d.url || './' },
-  }));
+  e.waitUntil(Promise.all([
+    self.registration.showNotification(d.title || 'PDS 플래너', {
+      body: d.body || '', icon: 'icon-192.png', badge: 'icon-192.png', tag: d.tag || undefined,
+      data: { url: d.url || './' },
+    }),
+    // 마지막으로 받은 푸시 기록 (수신 확인용)
+    caches.open(CACHE).then(c => c.put('./__last-push', new Response(JSON.stringify({ ...d, at: new Date().toISOString() }), { headers: { 'Content-Type': 'application/json' } }))).catch(() => { }),
+  ]));
 });
 // 알림을 누르면 열려 있는 앱으로 이동(없으면 새 창). url 예: ./?tab=do&date=2026-10-30
 self.addEventListener('notificationclick', e => {
