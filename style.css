@@ -380,6 +380,8 @@ li.dragging { opacity: .45; }
 /* 플로팅 + 버튼 */
 .fab { position: fixed; right: 18px; bottom: calc(78px + env(safe-area-inset-bottom)); z-index: 25; width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: #fff; border: none; font-size: 30px; line-height: 1; box-shadow: 0 8px 22px rgba(79, 70, 229, .45); }
 .fab:hover { filter: brightness(1.08); }
+.savestate { right: 86px; }
+.grip { font-size: 14px; padding: 0 2px; }
 /* 바텀시트 */
 .grab { width: 42px; height: 5px; border-radius: 9px; background: var(--line); margin: -4px auto 10px; cursor: pointer; }
 .sheetlist { display: grid; gap: 8px; margin-top: 6px; }
