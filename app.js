@@ -359,7 +359,7 @@ function runArea(H, days) {
     <div class="aline"><span>이번 주</span><b>${done.length}/${train.length}회</b><span>${km ? km.toFixed(1) : 0}${planKm ? '/' + planKm.toFixed(0) : ''}km</span></div>
     <div class="bar sm"><i style="width:${planKm ? Math.min(100, km / planKm * 100) : 0}%"></i></div>
     ${S.race ? `<p class="muted small">${esc(S.race.name)} · 목표 ${esc(S.race.goal)}</p>` : ''}
-    <a class="linkbtn small" href="${esc(S.profile.links.runningApp)}" target="_blank" rel="noopener">런닝 캘린더 ↗</a>
+    <div class="btnrow areabtns"><button class="sm" data-act="openurl" data-url="${esc(S.profile.links.runningApp)}">🏃 런닝 캘린더 ↗</button></div>
   </section>`;
 }
 function readArea() {
@@ -529,8 +529,8 @@ function dueReviews(date) {
 }
 function readingStatusLine() {
   if (!db.hasReading) return '';
-  if (S.reading) return `<p class="muted small">🔗 독서앱 연동됨 · <a href="${esc(S.profile.links.readingApp)}" target="_blank" rel="noopener">독서앱 열기 ↗</a></p>`;
-  return `<p class="small"><a href="#" data-act="gotab" data-tab="set">🔗 독서앱 연결하기 ›</a> <span class="muted">책·쪽수·독서 시간 자동 불러오기</span></p>`;
+  if (S.reading) return `<div class="btnrow areabtns"><span class="muted small">🔗 독서앱 연동됨</span><button class="sm" data-act="openurl" data-url="${esc(S.profile.links.readingApp)}">📖 독서앱 열기 ↗</button></div>`;
+  return `<div class="btnrow areabtns"><button class="sm" data-act="gotab" data-tab="set">🔗 독서앱 연결하기</button><span class="muted small">책·쪽수·독서 시간 자동 불러오기</span></div>`;
 }
 const bookOpts = sel => `<option value="">직접 입력</option>` + (S.reading?.books || []).filter(b => b.status !== 'done' || b.id === sel)
   .map(b => `<option value="${b.id}" ${b.id === sel ? 'selected' : ''}>${esc(b.title)}${b.status === 'want' ? ' (읽을 책)' : b.status === 'done' ? ' (완독)' : ''}</option>`).join('');
@@ -614,7 +614,8 @@ function planView() {
           <input data-bind="profile.tracks.${i}.action" value="${esc(t.action)}" placeholder="책에서 가져온 행동 1개" class="grow" />
           <button class="sm" data-act="action2task" data-i="${i}" ${t.action ? '' : 'disabled'}>오늘 할 일로</button></div>
       </div>`; }).join('')}
-    <p class="muted">독서 기록·리뷰는 <a href="${esc(p.links.readingApp)}" target="_blank" rel="noopener">독서앱</a>에서. 여기서는 진행 체크와 실행 과제 연결만 합니다.</p>
+    <p class="muted">독서 기록·리뷰는 독서앱에서. 여기서는 진행 체크와 실행 과제 연결만 합니다.</p>
+    <div class="btnrow areabtns"><button class="sm" data-act="openurl" data-url="${esc(p.links.readingApp)}">📖 독서앱 열기 ↗</button></div>
   </section>`;
 }
 
@@ -668,7 +669,7 @@ function runCard() {
         <span class="pill ${r.status}">${r.status === 'done' ? '완료' : r.status === 'skipped' ? '건너뜀' : '계획'}</span>
         ${r.details ? `<p class="muted">${esc(r.details)}</p>` : ''}</div>`).join('')
       : `<p class="muted">${db.isCloud ? '런닝 캘린더에 오늘 훈련이 없어요.' : '로컬 모드에서는 런닝 캘린더 연동이 꺼져 있어요.'} ${runBlock ? `루틴: ${esc(runBlock.title)}` : ''}</p>`}
-    <a class="linkbtn" href="${esc(p.links.runningApp)}" target="_blank" rel="noopener">런닝 캘린더에서 기록하기 ↗</a>
+    <div class="btnrow areabtns"><button class="sm" data-act="openurl" data-url="${esc(p.links.runningApp)}">🏃 런닝 캘린더에서 기록하기 ↗</button></div>
   </section>`;
 }
 function doView() {
@@ -710,7 +711,7 @@ function doView() {
     <h3>🎯 핵심 3</h3>
     ${d.top3.some(t => t.text.trim()) ? `<ul class="tasks">${d.top3.map((t, i) => t.text.trim() ? `<li class="${t.done ? 'done' : ''}"><label>
       <input type="checkbox" data-act="toggletop" data-i="${i}" ${t.done ? 'checked' : ''} /> ${areaDot(t.area)} <span>${esc(t.text)}</span></label></li>` : '').join('')}</ul>`
-      : `<p class="muted">아직 없어요. <a href="#" data-act="tab" data-tab="plan">Plan에서 정하기 ›</a></p>`}
+      : `<p class="muted">아직 없어요.</p><div class="btnrow areabtns"><button class="sm" data-act="tab" data-tab="plan">📋 Plan에서 정하기</button></div>`}
     <h3 class="mt">✅ 할 일</h3>
     ${taskList(false)}
   </section>
@@ -754,7 +755,7 @@ function doView() {
           ${auto ? `<span class="pill done">오늘 ${readMinutes(S.date, S.date, t.bookId)}분 ✓</span>` : `<button class="toggle sm ${read ? 'on' : ''}" data-act="readtoggle" data-id="${t.id}">${read ? '오늘 읽음 ✓' : '오늘 읽음'}</button>`}</div>
         <div class="row"><div class="bar sm grow"><i style="width:${p * 100}%"></i></div>
           <span class="muted">${tb.page || 0} / ${tb.total || '?'}쪽 (${Math.round(p * 100)}%)</span>
-          <a class="small" href="${esc(S.profile.links.readingApp)}" target="_blank" rel="noopener">독서앱에서 기록 ↗</a></div>
+          <button class="sm" data-act="openurl" data-url="${esc(S.profile.links.readingApp)}">독서앱에서 기록 ↗</button></div>
         ${t.action ? `<div class="muted small">실행 과제: ${esc(t.action)}</div>` : ''}
       </div>`;
       return `<div class="track">
