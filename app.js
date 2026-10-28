@@ -202,7 +202,8 @@ function render() {
     ${[['home', '⌂', '홈'], ['plan', 'P', '계획'], ['do', 'D', '실행'], ['see', 'S', '리뷰'], ['set', '⚙', '설정']].map(([k, i, l]) =>
       `<button data-act="tab" data-tab="${k}" class="${S.tab === k ? 'on' : ''}"><b>${i}</b><span>${l}</span></button>`).join('')}
   </nav>
-  ${focusOverlay()}${modalView()}`;
+  ${['home', 'plan', 'do'].includes(S.tab) && !S.modal && !getFocus() ? `<button class="fab" data-act="sheet" aria-label="빠른 추가">＋</button>` : ''}
+  ${acList()}${focusOverlay()}${modalView()}`;
   if (S.tab === 'see') afterSeeRender();
   if (S.tab === 'set') refreshPushState();
 }
@@ -319,13 +320,14 @@ function homeView() {
       <div><b>${sc?.top3 ? `${sc.top3.v}/${sc.top3.n}` : '–'}</b><span>핵심 3</span></div>
       <div><b>${d.review?.at ? '✓' : '–'}</b><span>하루 리뷰</span></div>
     </div>
+    ${pdsStepper()}
     ${d.intention ? `<p class="intent">🎯 ${esc(d.intention)}</p>` : ''}
   </section>
 
   ${upcomingCard()}
 
   <div class="dash">
-    <section class="card calcard">
+    <section class="card calcard ${H.loading ? 'loading' : ''}">
       <div class="calhead">
         <button class="icon" data-act="monthnav" data-n="-1" aria-label="이전 달">‹</button>
         <h3>📅 ${parse(first).getFullYear()}년 ${parse(first).getMonth() + 1}월</h3>
@@ -449,8 +451,8 @@ function pdsBoard() {
   ].filter(Boolean);
   const autoLi = it => `<li class="auto ${it.done ? 'done' : ''}" ${it.url ? `data-act="openurl" data-url="${esc(it.url)}"` : `data-act="gotab" data-tab="${it.tab}" data-see="${it.see || ''}"`}>
       <span class="chk ${it.done ? 'on' : ''}">${it.done ? '✓' : ''}</span><span class="grow">${esc(it.text)}</span><span class="go">›</span></li>`;
-  const taskLi = (t, i) => `<li class="${t.done ? 'done' : ''}"><label><input type="checkbox" data-act="toggletask" data-i="${i}" ${t.done ? 'checked' : ''} />
-      ${areaDot(t.area)}<span class="grow">${esc(t.text)}</span></label><button class="icon" data-act="deltask" data-i="${i}" title="삭제">✕</button></li>`;
+  const taskLi = (t, i) => `<li class="swipe ${t.done ? 'done' : ''}" draggable="true" data-drag="${i}"><div class="swc"><span class="grip" title="끌어서 다른 칸으로">⋮⋮</span><label><input type="checkbox" data-act="toggletask" data-i="${i}" ${t.done ? 'checked' : ''} />
+      ${areaDot(t.area)}<span class="grow">${esc(t.text)}</span></label><button class="icon" data-act="taskphase" data-i="${i}" title="다음 칸으로 (P→D→S)">⇄</button><button class="icon hide-touch" data-act="deltask" data-i="${i}" title="삭제">✕</button></div><button class="swdel" data-act="deltask" data-i="${i}">삭제</button></li>`;
   const mine = ph => d.tasks.map((t, i) => [t, i]).filter(([t]) => (t.phase || 'do') === ph);
   const topLi = d.top3.map((t, i) => t.text.trim() ? `<li class="${t.done ? 'done' : ''}"><label><input type="checkbox" data-act="toggletop" data-i="${i}" ${t.done ? 'checked' : ''} />
       ${areaDot(t.area)}<span class="grow"><b>핵심</b> ${esc(t.text)}</span></label></li>` : '').join('');
@@ -465,11 +467,11 @@ function pdsBoard() {
     const all = [...(ph === 'plan' ? autoP : ph === 'see' ? autoS : []), ...mt.map(([t]) => t)];
     const doneN = all.filter(x => x.done).length + (ph === 'do' ? d.top3.filter(t => t.text.trim() && t.done).length + runs.filter(r => r.status === 'done').length + acts.filter(a => a.done).length + evs.filter(e => e.done).length : 0);
     const totalN = all.length + (ph === 'do' ? t3 + runs.length + acts.length + evs.length : 0);
-    return `<section class="card pcol pc-${ph}">
+    return `<section class="card pcol pc-${ph}" data-ph="${ph}">
       <div class="phead"><b class="ph ph-${ph}">${PH[ph].k}</b><h3>${title}</h3><span class="muted small">${doneN}/${totalN}</span></div>
       <ul class="todo">${autoHtml}${extra}${mt.map(([t, i]) => taskLi(t, i)).join('')}</ul>
       ${!totalN ? '<p class="muted small">비어 있어요</p>' : ''}
-      <input class="addph" data-ph="${ph}" placeholder="+ ${PH[ph].l} 할 일 추가 (Enter)" />
+      <input class="addph" list="ac-titles" data-ph="${ph}" placeholder="+ ${PH[ph].l} 할 일 추가 (Enter)" />
     </section>`;
   };
   return `<div class="pdscols">
@@ -560,7 +562,7 @@ function planView() {
     ${d.top3.map((t, i) => `
       <div class="row">
         <select data-bind="day.top3.${i}.area" class="areasel">${areaOpts(t.area)}</select>
-        <input data-bind="day.top3.${i}.text" value="${esc(t.text)}" placeholder="${['사업: 예) 전자책 상세페이지 수정', '런닝: 예) 인터벌 8×400m', '독서: 예) 사피엔스 40쪽'][i] || ''}" />
+        <input data-bind="day.top3.${i}.text" list="ac-titles" value="${esc(t.text)}" placeholder="${['사업: 예) 전자책 상세페이지 수정', '런닝: 예) 인터벌 8×400m', '독서: 예) 사피엔스 40쪽'][i] || ''}" />
       </div>`).join('')}
   </section>
 
@@ -591,12 +593,12 @@ function planView() {
   </section>
 
   <section class="card">
-    <h3>✅ 할 일</h3>
+    <h3>✅ 할 일 <small>휴대폰: 왼쪽으로 밀면 삭제</small></h3>
     ${taskList(true)}
     <div class="row">
       <select id="newtaskphase" class="areasel">${phaseOpts('do')}</select>
       <select id="newtaskarea" class="areasel">${areaOpts('biz')}</select>
-      <input id="newtask" placeholder="할 일 입력 후 Enter" />
+      <input id="newtask" list="ac-titles" placeholder="할 일 입력 후 Enter" />
       <button data-act="addtask">추가</button>
     </div>
   </section>
@@ -622,11 +624,17 @@ function planView() {
 function taskList(editable) {
   const d = S.day;
   if (!d.tasks.length) return `<p class="muted">할 일이 없어요.</p>`;
-  return `<ul class="tasks">${d.tasks.map((t, i) => `
-    <li class="${t.done ? 'done' : ''}">
+  const f = S.f.task, fp = S.f.ph;
+  const cnt = { all: d.tasks.length, open: d.tasks.filter(t => !t.done).length, done: d.tasks.filter(t => t.done).length };
+  const rows = d.tasks.map((t, i) => [t, i]).filter(([t]) => (f === 'all' || (f === 'open' ? !t.done : t.done)) && (!fp || (t.phase || 'do') === fp));
+  return `<div class="fchips">${[['all', '전체'], ['open', '남은 것'], ['done', '완료']].map(([k, l]) => chip(l + ' ' + cnt[k], f === k, 'filt', { k: 'task', v: k })).join('')}
+      <span class="fsep"></span>${Object.entries(PH).map(([k, v]) => chip(v.k + ' ' + v.l, fp === k, 'filt', { k: 'ph', v: fp === k ? '' : k })).join('')}</div>
+    ${rows.length ? '' : '<p class="muted small">조건에 맞는 할 일이 없어요.</p>'}
+    <ul class="tasks">${rows.map(([t, i]) => `
+    <li class="swipe ${t.done ? 'done' : ''}"><div class="swc">
       <label><input type="checkbox" data-act="toggletask" data-i="${i}" ${t.done ? 'checked' : ''} /> <i class="ph ph-${t.phase || 'do'}">${PH[t.phase || 'do'].k}</i> ${areaDot(t.area)} <span>${esc(t.text)}</span></label>
-      ${editable ? `<span class="taskbtns"><button class="icon" data-act="movetask" data-i="${i}" title="내일로 미루기">→</button><button class="icon" data-act="deltask" data-i="${i}" title="삭제">✕</button></span>` : ''}
-    </li>`).join('')}</ul>`;
+      ${editable ? `<span class="taskbtns"><button class="icon" data-act="movetask" data-i="${i}" title="내일로 미루기">→</button><button class="icon hide-touch" data-act="deltask" data-i="${i}" title="삭제">✕</button></span>` : ''}
+    </div><button class="swdel" data-act="deltask" data-i="${i}">삭제</button></li>`).join('')}</ul>`;
 }
 
 /* ================= DO ================= */
@@ -683,11 +691,12 @@ function doView() {
   ${nowCard()}
   <section class="card">
     <h3>⏱ 타임라인 <small>${sc?.blocks ? `${sc.blocks.checked}/${sc.blocks.n} 체크 · 실행률 ${pct(sc.blocks.p)}` : ''}</small></h3>
+    ${tlChips(isToday, m)}
     <ol class="timeline">
-    ${timelineItems().map(({ b, i, e }) => {
+    ${timelineItems().filter(it => tlPass(it, isToday, m)).map(({ b, i, e }) => {
       if (e) return `<li class="tl event ${e.done ? 'done' : ''}" style="--c:${AREAS[e.area]?.color || '#999'}">
         <span class="t">${e.start_time || '종일'}</span>
-        <span class="ttl">📌 ${esc(e.title)} <i class="evtag">일정</i>${e.end_time ? ` <small class="muted">~${e.end_time}</small>` : ''}${e.memo ? `<small class="muted evmemo">${esc(e.memo)}</small>` : ''}</span>
+        <span class="ttl">📌 ${esc(e.title)} <i class="evtag">일정</i> ${evBadge(e)}${e.end_time ? ` <small class="muted">~${e.end_time}</small>` : ''}${e.memo ? `<small class="muted evmemo">${esc(e.memo)}</small>` : ''}</span>
         <span class="st">
           <button data-act="evtoggle" data-id="${e.id}" class="${e.done ? 'on' : ''}" title="완료">✓</button>
           <button data-act="evedit" data-id="${e.id}" title="수정">✎</button>
@@ -696,7 +705,7 @@ function doView() {
       const cur = isToday && toMin(b.start) <= m && m < toMin(b.end);
       return `<li class="tl ${b.status} ${past && !b.status ? 'needs' : ''} ${cur ? 'cur' : ''}" style="--c:${AREAS[b.area]?.color}">
         <span class="t">${b.start}</span>
-        <span class="ttl">${esc(b.title)}${past && !b.status ? ' <em>체크 필요</em>' : ''}</span>
+        <span class="ttl">${esc(b.title)} ${badge(blockBadge(b, isToday, m))}</span>
         <span class="st">
           <button data-act="bstatus" data-i="${i}" data-s="done" class="${b.status === 'done' ? 'on' : ''}" title="완료">✓</button>
           <button data-act="bstatus" data-i="${i}" data-s="partial" class="${b.status === 'partial' ? 'on' : ''}" title="부분">△</button>
@@ -776,7 +785,7 @@ function seeView() {
   return `<div class="seg">
     ${[['day', '하루'], ['week', '주간'], ['month', '월간']].map(([k, l]) => `<button data-act="seeview" data-v="${k}" class="${S.seeView === k ? 'on' : ''}">${l}</button>`).join('')}
   </div>
-  ${S.seeView === 'day' ? seeDay() : `<div id="seebody"><p class="muted center">불러오는 중…</p></div>`}`;
+  ${S.seeView === 'day' ? seeDay() : `<div id="seebody"><section class="card" aria-busy="true"><div class="skel" style="height:22px;width:55%"></div><div class="skel" style="height:150px;margin-top:14px"></div>${skelRows(3)}</section></div>`}`;
 }
 function scoreRows(sc) {
   if (!sc) return '';
@@ -1046,33 +1055,48 @@ function relDay(date) {
 /** 불러올 범위: 보고 있는 달 + 그 주 + 오늘~7일 */
 function evRange() {
   const { first, last } = monthBounds(S.date); const ws = weekStart(S.date); const t = today();
-  return { from: [first, ws, t].sort()[0], to: [last, addDays(ws, 6), addDays(t, 7)].sort()[2] };
+  return { from: [first, ws, t].sort()[0], to: [last, addDays(ws, 6), addDays(t, 7), monthBounds(t).last].sort()[3] };
 }
 async function loadEvents(force) {
   const { from, to } = evRange(); const key = from + '|' + to;
   if (!force && S.evKey === key) return;
   try { S.events = await db.listEvents(from, to); S.evKey = key; } catch (e) { S.evErr = e.message || String(e); }
 }
+function evBadge(e) {
+  if (e.done) return badge(['완료', 'ok']);
+  const t = today();
+  if (e.date < t || (e.date === t && (e.end_time || e.start_time) && toMin(e.end_time || e.start_time) < nowMin())) return badge(['지남', 'warn']);
+  if (e.date === t && e.start_time && toMin(e.start_time) <= nowMin()) return badge(['진행중', 'run']);
+  return e.date === t ? badge(['오늘', 'plan']) : '';
+}
 function evItem(e, withDate) {
-  return `<li class="evi ${e.done ? 'done' : ''}" style="--c:${AREAS[e.area]?.color || '#999'}">
+  return `<li class="evi swipe ${e.done ? 'done' : ''}" style="--c:${AREAS[e.area]?.color || '#999'}"><div class="swc">
     <input type="checkbox" data-act="evdone" data-id="${e.id}" ${e.done ? 'checked' : ''} title="완료" aria-label="${esc(e.title)} 완료" />
-    <button class="evbody" data-act="evedit" data-id="${e.id}" title="눌러서 수정·삭제">
+    <button class="evbody" data-act="evedit" data-id="${e.id}" title="눌러서 수정·삭제 (휴대폰: 왼쪽으로 밀면 삭제)">
       <span class="evt">${withDate ? `<b>${relDay(e.date)}</b> ` : ''}${evTime(e)}</span>
-      <span class="evn">${esc(e.title)}</span>
+      <span class="evn">${esc(e.title)} ${evBadge(e)}</span>
       ${e.remind && e.remind !== 'none' ? `<span class="evr">🔔${remindLabel(e.remind)}</span>` : ''}
       ${e.memo ? `<small class="evm">${esc(e.memo)}</small>` : ''}
-    </button></li>`;
+    </button></div><button class="swdel" data-act="evdelq" data-id="${e.id}">삭제</button></li>`;
 }
 function evList(list, { empty = '', withDate = false } = {}) {
   return list.length ? `<ul class="evlist">${list.map(e => evItem(e, withDate)).join('')}</ul>` : `<p class="muted small">${empty}</p>`;
 }
 function upcomingCard() {
-  const t = today(); const end = addDays(t, 7);
+  const t = today(); const seg = S.upSeg || 'week';
+  const end = seg === 'today' ? t : seg === 'month' ? monthBounds(t).last : addDays(t, 7);
+  const label = { today: '오늘', week: '7일', month: '이번 달' }[seg];
   const list = S.events.filter(e => e.date >= t && e.date <= end && !e.done).sort(evSort);
-  return `<section class="card upcoming"><div class="ahead"><h3>📌 다가오는 일정 <small>오늘~7일</small></h3>
+  const loading = !S.evKey && !S.evErr;
+  const lim = seg === 'month' ? 10 : 6;
+  return `<section class="card upcoming"><div class="ahead"><h3>📌 다가오는 일정</h3>
       <button class="sm primary" data-act="evnew" data-d="${S.date}">+ 일정 추가</button></div>
-    ${evList(list.slice(0, 6), { withDate: true, empty: '7일 안에 잡힌 일정이 없어요. 병원·모임·마감 같은 일정을 넣어 두면 알림으로 알려드려요.' })}
-    ${list.length > 6 ? `<p class="muted small">외 ${list.length - 6}개 · 달력에서 날짜를 누르면 그날 일정이 보여요</p>` : ''}
+    <div class="seg sm" role="tablist">${[['today', '오늘'], ['week', '이번 주(7일)'], ['month', '이번 달']].map(([k, l]) => {
+      const e2 = k === 'today' ? t : k === 'month' ? monthBounds(t).last : addDays(t, 7);
+      const n = S.events.filter(e => e.date >= t && e.date <= e2 && !e.done).length;
+      return `<button role="tab" data-act="upseg" data-v="${k}" class="${seg === k ? 'on' : ''}">${l}${n ? ` <i class="segn">${n}</i>` : ''}</button>`; }).join('')}</div>
+    ${loading ? skelRows(2) : evList(list.slice(0, lim), { withDate: seg !== 'today', empty: `${label} 안에 남은 일정이 없어요. 병원·모임·마감 같은 일정을 넣어 두면 알림으로 알려드려요.` })}
+    ${list.length > lim ? `<p class="muted small">외 ${list.length - lim}개 · 달력에서 날짜를 누르면 그날 일정이 보여요</p>` : ''}
   </section>`;
 }
 function dayEventsBlock(date) {
@@ -1109,12 +1133,14 @@ function remindText(ev) {
 }
 function updateRemindHint() { if (S.modal?.type !== 'event') return; readEvForm(); const el = $('#ev-hint'); if (el) el.textContent = remindText(S.modal.ev); }
 function modalView() {
-  const m = S.modal; if (!m || m.type !== 'event') return '';
+  const m = S.modal; if (!m) return '';
+  if (m.type === 'sheet' || m.type === 'task') return sheetView(m);
+  if (m.type !== 'event') return '';
   const e = m.ev;
   return `<div class="modal" data-act="modalbg"><div class="mbox" role="dialog" aria-modal="true" aria-label="${e.id ? '일정 수정' : '일정 추가'}">
     <div class="ahead"><h3>${e.id ? '✎ 일정 수정' : '📌 일정 추가'}</h3><button class="icon" data-act="modalclose" aria-label="닫기">✕</button></div>
     <label class="lbl" for="ev-title">제목</label>
-    <input id="ev-title" value="${esc(e.title)}" placeholder="예: 치과 예약, 북클럽 모임, 전자책 마감" maxlength="120" />
+    <input id="ev-title" list="ac-titles" autocomplete="off" value="${esc(e.title)}" placeholder="예: 치과 예약, 북클럽 모임, 전자책 마감" maxlength="120" />
     <div class="g2">
       <div><label class="lbl" for="ev-date">날짜</label><input type="date" id="ev-date" value="${esc(e.date)}" /></div>
       <div><label class="lbl" for="ev-area">영역</label><select id="ev-area">${areaOpts(e.area)}</select></div>
@@ -1147,7 +1173,7 @@ async function saveEventForm() {
   const same = old && (old.remind_at ? Date.parse(old.remind_at) : null) === (ra ? Date.parse(ra) : null);
   const row = { ...e, title: e.title.trim(), remind_at: ra, reminded_at: same ? old.reminded_at : null };
   try {
-    const saved = await db.saveEvent(row);
+    const saved = await db.saveEvent(row); pushRecent(saved.title);
     S.events = S.events.filter(x => x.id !== saved.id).concat(saved);
     S.modal = null;
     toast(old ? '일정을 고쳤어요' : `일정 추가: ${relDay(saved.date)} ${saved.title}`);
@@ -1410,6 +1436,169 @@ setInterval(() => {
 }, 15000);
 setInterval(() => { if (S.user && S.profile) localNotifyTick(); }, 15000);
 
+/* ================= UI 패턴: 바텀시트·필터 칩·상태 배지·스테퍼·스켈레톤·자동완성·밀어서 삭제·당겨서 새로고침·칸반 ================= */
+S.f = { task: 'all', ph: '', tl: 'all' };
+const chip = (label, on, act, data = {}) => `<button class="fchip ${on ? 'on' : ''}" data-act="${act}" ${Object.entries(data).map(([k, v]) => `data-${k}="${esc(v)}"`).join(' ')}>${label}</button>`;
+const badge = ([t, c]) => `<span class="sbadge ${c}">${t}</span>`;
+function blockBadge(b, isToday, m) {
+  if (b.status === 'done') return ['완료', 'ok'];
+  if (b.status === 'partial') return ['부분', 'mid'];
+  if (b.status === 'skip') return ['못함', 'bad'];
+  if (isToday && toMin(b.start) <= m && m < toMin(b.end)) return ['진행중', 'run'];
+  if ((isToday && toMin(b.end) <= m) || S.date < today()) return ['체크 필요', 'warn'];
+  return ['예정', 'plan'];
+}
+function tlPass(it, isToday, m) {
+  const f = S.f.tl; if (f === 'all') return true;
+  if (f === 'event') return !!it.e;
+  if (it.e) return f === 'open' ? !it.e.done : false;
+  const st = blockBadge(it.b, isToday, m)[1];
+  return f === 'open' ? !it.b.status : st === 'warn';
+}
+function tlChips(isToday, m) {
+  const its = timelineItems();
+  const n = k => its.filter(it => { const o = S.f.tl; S.f.tl = k; const r = tlPass(it, isToday, m); S.f.tl = o; return r; }).length;
+  return `<div class="fchips">${[['all', '전체'], ['open', '남은 것'], ['warn', '체크 필요'], ['event', '일정만']].map(([k, l]) => chip(`${l} ${n(k)}`, S.f.tl === k, 'filt', { k: 'tl', v: k })).join('')}</div>`;
+}
+/** 오늘의 P→D→S 진행 단계 */
+function pdsStepper() {
+  const d = S.day; const isToday = S.date === today(); const m = nowMin();
+  const planDone = d.top3.some(t => t.text.trim()) || !!d.intention?.trim();
+  const checked = d.blocks.filter(b => b.status).length;
+  const dueOpen = d.blocks.filter(b => !b.status && (!isToday || toMin(b.end) <= m)).length;
+  const doDone = d.blocks.length > 0 && checked > 0 && dueOpen === 0 && (!isToday || d.blocks.every(b => b.status || toMin(b.start) > m));
+  const seeDone = !!d.review?.at;
+  const steps = [
+    { k: 'plan', l: '계획', sub: planDone ? '핵심 3 ✓' : '핵심 3 정하기', done: planDone },
+    { k: 'do', l: '실행', sub: `블록 ${checked}/${d.blocks.length}${dueOpen ? ` · 체크 ${dueOpen}` : ''}`, done: doDone },
+    { k: 'see', l: '리뷰', sub: seeDone ? '작성 완료' : S.profile.reviewTime, done: seeDone },
+  ];
+  const cur = steps.findIndex(s => !s.done);
+  return `<ol class="stepper" aria-label="오늘 진행 단계">${steps.map((s, i) => `<li class="${s.done ? 'done' : ''} ${i === cur ? 'cur' : ''}">
+    <button data-act="tab" data-tab="${s.k}"><b>${s.done ? '✓' : PH[s.k].k}</b><span>${s.l}</span><small>${esc(s.sub)}</small></button></li>`).join('')}</ol>`;
+}
+const skelRows = n => `<div class="skelrows" aria-busy="true">${Array.from({ length: n }, (_, i) => `<div class="skel" style="height:16px;width:${88 - i * 14}%"></div>`).join('')}</div>`;
+/* 자동완성: 최근 입력한 일정·할 일 제목 */
+const ACKEY = 'pds-ac';
+function pushRecent(t) {
+  t = (t || '').trim(); if (!t) return;
+  let a; try { a = JSON.parse(localStorage.getItem(ACKEY)) || []; } catch { a = []; }
+  a = [t, ...a.filter(x => x !== t)].slice(0, 80); localStorage.setItem(ACKEY, JSON.stringify(a));
+}
+function acList() {
+  if (!S.day) return '';
+  let a; try { a = JSON.parse(localStorage.getItem(ACKEY)) || []; } catch { a = []; }
+  const all = [...a, ...S.events.map(e => e.title), ...S.day.tasks.map(t => t.text), ...S.day.top3.map(t => t.text)].map(x => (x || '').trim()).filter(Boolean);
+  return `<datalist id="ac-titles">${[...new Set(all)].slice(0, 100).map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>`;
+}
+/* 바텀시트: 빠른 추가 + 할 일 추가 */
+function sheetView(m) {
+  const isToday = S.date === today(); const cur = isToday ? currentBlocks().cur : null;
+  const head = t => `<div class="grab" data-act="modalclose" aria-hidden="true"></div><div class="ahead"><h3>${t}</h3><button class="icon" data-act="modalclose" aria-label="닫기">✕</button></div>`;
+  if (m.type === 'sheet') return `<div class="modal sheetwrap" data-act="modalbg"><div class="mbox sheet" role="dialog" aria-modal="true" aria-label="빠른 추가">
+    ${head(`빠른 추가 · ${isToday ? '오늘' : fmtDate(S.date)}`)}
+    <div class="sheetlist">
+      <button data-act="sheetpick" data-v="event"><b>📌</b><span>일정 추가<small>날짜·시간·알림</small></span></button>
+      <button data-act="sheetpick" data-v="task"><b>✅</b><span>할 일 추가<small>P·D·S 중 골라서</small></span></button>
+      ${cur ? `<button data-act="sheetpick" data-v="focus"><b>⏳</b><span>집중 타이머<small>지금: ${esc(cur.title)} ~${cur.end}</small></span></button>` : ''}
+      <button data-act="sheetpick" data-v="top3"><b>🎯</b><span>핵심 3 정하기<small>Plan 탭으로</small></span></button>
+      <button data-act="sheetpick" data-v="review"><b>✍️</b><span>하루 리뷰 쓰기<small>See 탭으로</small></span></button>
+    </div></div></div>`;
+  return `<div class="modal sheetwrap" data-act="modalbg"><div class="mbox sheet" role="dialog" aria-modal="true" aria-label="할 일 추가">
+    ${head(`✅ 할 일 추가 · ${isToday ? '오늘' : fmtDate(S.date)}`)}
+    <div class="seg" role="tablist">${Object.entries(PH).map(([k, v]) => `<button role="tab" data-act="sheetph" data-v="${k}" class="${m.phase === k ? 'on' : ''}"><b>${v.k}</b> ${v.l}</button>`).join('')}</div>
+    <label class="lbl" for="sh-task">할 일</label>
+    <input id="sh-task" list="ac-titles" autocomplete="off" value="${esc(m.text || '')}" placeholder="예: 스레드 글 3개 초안" maxlength="120" />
+    <label class="lbl">영역</label>
+    <div class="fchips">${Object.entries(AREAS).map(([k, v]) => `<button class="fchip ${m.area === k ? 'on' : ''}" data-act="sheetarea" data-v="${k}">${areaDot(k)} ${v.label}</button>`).join('')}</div>
+    ${m.msg ? `<p class="warn small">${esc(m.msg)}</p>` : ''}
+    <div class="btnrow"><button class="primary" data-act="tasksave">추가</button><button data-act="tasksave" data-more="1">추가하고 계속</button><button class="ghost" data-act="modalclose">닫기</button></div>
+  </div></div>`;
+}
+function saveTaskSheet(more) {
+  const m = S.modal; const text = ($('#sh-task')?.value || '').trim();
+  if (!text) { m.msg = '할 일을 입력하세요'; render(); $('#sh-task')?.focus(); return; }
+  S.day.tasks.push({ id: uid(), text, area: m.area, phase: m.phase, done: false });
+  pushRecent(text); markDirty('day');
+  toast(`${PH[m.phase].k} ${PH[m.phase].l}에 추가: ${text}`);
+  if (more) { m.text = ''; m.msg = ''; render(); $('#sh-task')?.focus(); } else { S.modal = null; render(); }
+}
+async function quickDeleteEvent(id) {
+  const e = S.events.find(x => x.id === id); if (!e) return;
+  try { await db.deleteEvent(id); S.events = S.events.filter(x => x.id !== id); toast(`일정 삭제: ${e.title}`); }
+  catch (er) { toast('삭제 실패: ' + (er.message || er)); }
+  render();
+}
+/* 당겨서 새로고침 */
+async function refreshAll() {
+  await flush();
+  S.home = null; S.evKey = null;
+  try { S.profile = mergeProfile(await db.getProfile()); } catch { }
+  await loadDate(S.date);
+  toast('새로 불러왔어요');
+}
+const ptrEl = Object.assign(document.createElement('div'), { className: 'ptr', innerHTML: '<i></i><span>당겨서 새로고침</span>' });
+document.body.appendChild(ptrEl);
+let ptr = null, sw = null, ptrBusy = false;
+const SWW = 84;
+document.addEventListener('touchstart', e => {
+  const t = e.touches[0]; const li = e.target.closest('li.swipe');
+  document.querySelectorAll('li.swipe.swiped').forEach(x => { if (x !== li) x.classList.remove('swiped'); });
+  sw = li && !e.target.closest('.swdel') ? { li, x: t.clientX, y: t.clientY, dx: 0, open: li.classList.contains('swiped'), lock: null } : null;
+  ptr = !ptrBusy && S.user && !S.modal && !getFocus() && window.scrollY <= 0 && !e.target.closest('.mbox, input, textarea, select') ? { y: t.clientY, x: t.clientX, d: 0, lock: null } : null;
+}, { passive: true });
+document.addEventListener('touchmove', e => {
+  const t = e.touches[0];
+  if (sw) {
+    const dx = t.clientX - sw.x, dy = t.clientY - sw.y;
+    if (sw.lock == null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) sw.lock = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    if (sw.lock === 'x') {
+      ptr = null; sw.dx = dx;
+      const c = sw.li.querySelector('.swc'); c.style.transition = 'none';
+      c.style.transform = `translateX(${Math.max(-SWW - 30, Math.min(0, (sw.open ? -SWW : 0) + dx))}px)`;
+      return;
+    }
+  }
+  if (ptr) {
+    const d = t.clientY - ptr.y; const dx = t.clientX - ptr.x;
+    if (ptr.lock == null && (Math.abs(d) > 8 || Math.abs(dx) > 8)) ptr.lock = d > 0 && Math.abs(d) > Math.abs(dx) ? 'y' : 'no';
+    if (ptr.lock !== 'y' || window.scrollY > 0) return;
+    ptr.d = d; const h = Math.min(90, d * 0.5);
+    ptrEl.style.transform = `translate(-50%, ${h - 50}px)`; ptrEl.style.opacity = Math.min(1, h / 60);
+    ptrEl.classList.toggle('ready', h >= 60);
+    ptrEl.querySelector('span').textContent = h >= 60 ? '놓으면 새로고침' : '당겨서 새로고침';
+    ptrEl.querySelector('i').style.transform = `rotate(${h * 5}deg)`;
+  }
+}, { passive: true });
+document.addEventListener('touchend', async () => {
+  if (sw) {
+    const c = sw.li.querySelector('.swc'); c.style.transition = ''; c.style.transform = '';
+    if (sw.lock === 'x') sw.li.classList.toggle('swiped', (sw.open ? -SWW : 0) + sw.dx < -SWW / 2);
+    sw = null;
+  }
+  if (ptr) {
+    const go = ptr.lock === 'y' && Math.min(90, ptr.d * 0.5) >= 60; ptr = null;
+    if (go) {
+      ptrBusy = true; ptrEl.classList.add('busy'); ptrEl.querySelector('span').textContent = '불러오는 중…';
+      ptrEl.style.transform = 'translate(-50%, 10px)';
+      try { await refreshAll(); } catch (er) { toast('새로고침 실패: ' + (er.message || er)); }
+      ptrBusy = false; ptrEl.classList.remove('busy');
+    }
+    ptrEl.style.transform = ''; ptrEl.style.opacity = ''; ptrEl.classList.remove('ready');
+  }
+});
+/* 칸반: 홈 P·D·S 보드에서 할 일을 다른 칸으로 끌어 옮기기 */
+let dragI = null;
+document.addEventListener('dragstart', e => { const li = e.target.closest?.('li[data-drag]'); if (!li) return; dragI = Number(li.dataset.drag); li.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(dragI)); } catch { } });
+document.addEventListener('dragend', () => { dragI = null; document.querySelectorAll('.dragging, .pcol.over').forEach(x => x.classList.remove('dragging', 'over')); });
+document.addEventListener('dragover', e => { if (dragI == null) return; const col = e.target.closest?.('.pcol[data-ph]'); if (!col) return; e.preventDefault(); document.querySelectorAll('.pcol.over').forEach(x => x !== col && x.classList.remove('over')); col.classList.add('over'); });
+document.addEventListener('drop', e => {
+  const col = e.target.closest?.('.pcol[data-ph]'); if (dragI == null || !col) return; e.preventDefault();
+  const t = S.day.tasks[dragI]; const ph = col.dataset.ph; dragI = null;
+  if (t && (t.phase || 'do') !== ph) { t.phase = ph; markDirty('day'); toast(`${PH[ph].k} ${PH[ph].l} 칸으로 옮겼어요`); }
+  render();
+});
+
 /* ================= events ================= */
 function setPath(path, value) {
   const keys = path.split('.');
@@ -1442,7 +1631,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.dataset?.ph) { e.preventDefault(); act('addtaskph', { ph: e.target.dataset.ph }); }
   if (e.key === 'Enter' && e.target.id === 'bookadd') { e.preventDefault(); act('addbook'); }
   if (e.key === 'Enter' && e.target.closest?.('#loginform')) { e.preventDefault(); act('login'); }
-  if (e.key === 'Enter' && e.target.closest?.('.mbox') && e.target.tagName === 'INPUT') { e.preventDefault(); act('evsave'); }
+  if (e.key === 'Enter' && e.target.id === 'sh-task') { e.preventDefault(); saveTaskSheet(true); return; }
+  if (e.key === 'Enter' && e.target.closest?.('.mbox') && e.target.tagName === 'INPUT' && S.modal?.type === 'event') { e.preventDefault(); act('evsave'); }
   if (e.key === 'Escape' && S.modal) { S.modal = null; render(); }
 });
 document.addEventListener('click', e => {
@@ -1468,7 +1658,7 @@ async function act(a, ds = {}, el) {
     case 'gotab': S.tab = ds.tab; if (ds.see) S.seeView = ds.see; render(); scrollTo(0, 0); break;
     case 'addtaskph': {
       const inp = document.querySelector(`.addph[data-ph="${ds.ph}"]`); const t = inp?.value.trim(); if (!t) break;
-      d.tasks.push({ id: uid(), text: t, area: ds.ph === 'do' ? 'biz' : ds.ph === 'see' ? 'review' : 'life', phase: ds.ph, done: false });
+      d.tasks.push({ id: uid(), text: t, area: ds.ph === 'do' ? 'biz' : ds.ph === 'see' ? 'review' : 'life', phase: ds.ph, done: false }); pushRecent(t);
       markDirty('day'); render(); document.querySelector(`.addph[data-ph="${ds.ph}"]`)?.focus(); break;
     }
     case 'seeview': S.seeView = ds.v; render(); break;
@@ -1482,7 +1672,7 @@ async function act(a, ds = {}, el) {
       d.blocks = blocksFor(S.date, p.template); markDirty('day'); render(); break;
     case 'addtask': {
       const inp = $('#newtask'); const t = inp?.value.trim(); if (!t) break;
-      d.tasks.push({ id: uid(), text: t, area: $('#newtaskarea')?.value || 'biz', phase: $('#newtaskphase')?.value || 'do', done: false });
+      d.tasks.push({ id: uid(), text: t, area: $('#newtaskarea')?.value || 'biz', phase: $('#newtaskphase')?.value || 'do', done: false }); pushRecent(t);
       markDirty('day'); render(); $('#newtask')?.focus(); break;
     }
     case 'deltask': d.tasks.splice(Number(ds.i), 1); markDirty('day'); render(); break;
@@ -1559,6 +1749,21 @@ async function act(a, ds = {}, el) {
     case 'evdone': await setEventDone(ds.id, el.checked); break;
     case 'evtoggle': { const e = S.events.find(x => x.id === ds.id); if (e) await setEventDone(e.id, !e.done); break; }
     case 'modalclose': case 'modalbg': S.modal = null; render(); break;
+    case 'evdelq': await quickDeleteEvent(ds.id); break;
+    // UI 패턴
+    case 'sheet': S.modal = { type: 'sheet' }; render(); break;
+    case 'sheetpick':
+      if (ds.v === 'event') openEvent(null, S.date);
+      else if (ds.v === 'task') { S.modal = { type: 'task', phase: S.tab === 'plan' ? 'plan' : 'do', area: 'biz', text: '' }; render(); setTimeout(() => $('#sh-task')?.focus(), 60); }
+      else if (ds.v === 'focus') { S.modal = null; const c = currentBlocks().cur; if (c) startFocus(d.blocks.indexOf(c)); else render(); }
+      else { S.modal = null; S.tab = ds.v === 'top3' ? 'plan' : 'see'; if (ds.v === 'review') S.seeView = 'day'; render(); scrollTo(0, 0); }
+      break;
+    case 'sheetph': S.modal.text = $('#sh-task')?.value || ''; S.modal.phase = ds.v; render(); break;
+    case 'sheetarea': S.modal.text = $('#sh-task')?.value || ''; S.modal.area = ds.v; render(); break;
+    case 'tasksave': saveTaskSheet(!!ds.more); break;
+    case 'taskphase': { const t = d.tasks[ds.i]; const order = ['plan', 'do', 'see']; t.phase = order[(order.indexOf(t.phase || 'do') + 1) % 3]; markDirty('day'); toast(`${PH[t.phase].k} ${PH[t.phase].l} 칸으로 옮겼어요`); render(); break; }
+    case 'filt': S.f[ds.k] = ds.v; render(); break;
+    case 'upseg': S.upSeg = ds.v; render(); break;
     // 알림
     case 'pushon': await enablePush(); break;
     case 'pushoff': await disablePush(); break;

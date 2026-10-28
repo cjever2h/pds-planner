@@ -1,5 +1,5 @@
 // 서비스 워커: 앱 셸 캐시(네트워크 우선) + 웹 푸시 알림
-const CACHE = 'pds-v2';
+const CACHE = 'pds-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'store.js', 'data.js', 'config.js', 'manifest.json', 'icon.svg', 'icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
