@@ -105,3 +105,17 @@ grant select, insert, update, delete on public.pds_events, public.pds_push_subs,
 --   url := 'https://gcnfvcbatpohhctitnkl.supabase.co/functions/v1/pds-push',
 --   headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', '<CRON_SECRET>'),
 --   body := '{}'::jsonb, timeout_milliseconds := 20000) $$);
+
+-- 월간 계획 (2026-10-29)
+create table if not exists public.pds_months (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  month text not null check (month ~ '^\d{4}-\d{2}$'),
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, month)
+);
+alter table public.pds_months enable row level security;
+drop policy if exists "own pds_months" on public.pds_months;
+create policy "own pds_months" on public.pds_months for all to authenticated
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+grant select, insert, update, delete on public.pds_months to authenticated;

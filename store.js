@@ -86,6 +86,22 @@ export async function saveWeek(weekStart, data) {
   chk(await sb.from('pds_weeks').upsert({ user_id: uid, week_start: weekStart, data, updated_at: now() }, { onConflict: 'user_id,week_start' }));
 }
 
+export async function listWeeks(from, to) {
+  if (!isCloud) { const w = lload().weeks; return Object.keys(w).filter(k => k >= from && k <= to).sort().map(k => ({ week_start: k, data: w[k] })); }
+  return chk(await sb.from('pds_weeks').select('week_start,data').gte('week_start', from).lte('week_start', to).order('week_start'));
+}
+
+/* ---------- months (month = 'YYYY-MM') : 월간 계획 ---------- */
+export async function getMonth(month) {
+  if (!isCloud) return lload().months?.[month] ?? null;
+  const r = chk(await sb.from('pds_months').select('data').eq('month', month).maybeSingle());
+  return r?.data ?? null;
+}
+export async function saveMonth(month, data) {
+  if (!isCloud) { const d = lload(); d.months ||= {}; d.months[month] = data; lsave(d); return; }
+  chk(await sb.from('pds_months').upsert({ user_id: uid, month, data, updated_at: now() }, { onConflict: 'user_id,month' }));
+}
+
 /* ---------- 일정 (pds_events: 블록과 별도 저장 → 근무표 변경·템플릿 재생성에 영향 없음) ---------- */
 const EV_COLS = ['date', 'start_time', 'end_time', 'title', 'area', 'memo', 'remind', 'remind_at', 'reminded_at', 'done'];
 const evRow = ev => Object.fromEntries(EV_COLS.map(k => [k, ev[k] ?? (k === 'done' ? false : k === 'memo' ? '' : null)]));
@@ -195,7 +211,8 @@ export async function exportAll() {
   const days = chk(await sb.from('pds_days').select('date,data').order('date'));
   const weeks = chk(await sb.from('pds_weeks').select('week_start,data').order('week_start'));
   const events = chk(await sb.from('pds_events').select('id,' + EV_COLS.join(',')).order('date'));
-  return { exported_at: now(), app: 'pds-planner', profile, days, weeks, events };
+  const months = chk(await sb.from('pds_months').select('month,data').order('month'));
+  return { exported_at: now(), app: 'pds-planner', profile, days, weeks, months, events };
 }
 export async function importAll(j) {
   if (j.profile) await saveProfile(j.profile);
@@ -203,6 +220,8 @@ export async function importAll(j) {
   for (const d of days) await saveDay(d.date, d.data);
   const weeks = Array.isArray(j.weeks) ? j.weeks : Object.entries(j.weeks || {}).map(([week_start, data]) => ({ week_start, data }));
   for (const w of weeks) await saveWeek(w.week_start, w.data);
+  const months = Array.isArray(j.months) ? j.months : Object.entries(j.months || {}).map(([month, data]) => ({ month, data }));
+  for (const m of months) await saveMonth(m.month, m.data);
   const have = new Set((await listEvents('0000-01-01', '9999-12-31')).map(e => e.id));
   for (const e of j.events || []) await saveEvent({ ...e, id: have.has(e.id) ? e.id : undefined, reminded_at: null });
 }

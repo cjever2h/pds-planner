@@ -53,6 +53,7 @@ async function flush() {
       if (j === 'day') await db.saveDay(S.date, S.day);
       if (j === 'week') await db.saveWeek(weekStart(S.date), S.week);
       if (j === 'nextWeek') await db.saveWeek(addDays(weekStart(S.date), 7), S.nextWeek);
+      if (j === 'month') await db.saveMonth(S.monthKey || S.date.slice(0, 7), S.month);
       if (j === 'profile') await db.saveProfile(S.profile);
     }
     setSaveState('저장됨 ✓');
@@ -122,8 +123,16 @@ function normDay(d, date) {
   if (!d) return n;
   return { ...n, ...d, top3: d.top3?.length ? d.top3 : n.top3 };
 }
-const newWeek = () => ({ goals: { run: '', read: '', biz: '' }, goalsDone: {}, review: {} });
-const normWeek = w => ({ ...newWeek(), ...(w || {}), goals: { ...newWeek().goals, ...(w?.goals || {}) } });
+const newWeek = () => ({ goals: { run: '', read: '', biz: '' }, goalsDone: {}, review: {}, theme: '', priorities: [], focus: {}, targets: {}, notes: '' });
+const normWeek = w => {
+  const n = newWeek();
+  return { ...n, ...(w || {}), goals: { ...n.goals, ...(w?.goals || {}) }, goalsDone: { ...(w?.goalsDone || {}) }, focus: { ...(w?.focus || {}) }, targets: { ...(w?.targets || {}) }, priorities: Array.isArray(w?.priorities) ? w.priorities : [] };
+};
+const newMonth = () => ({ theme: '', topic: '', goals: { run: '', read: '', biz: '', life: '' }, goalsDone: {}, krs: [], targets: {}, notes: '' });
+const normMonth = m => {
+  const n = newMonth();
+  return { ...n, ...(m || {}), goals: { ...n.goals, ...(m?.goals || {}) }, goalsDone: { ...(m?.goalsDone || {}) }, targets: { ...(m?.targets || {}) }, krs: Array.isArray(m?.krs) ? m.krs : [] };
+};
 
 function cavemanItems(date) { return S.profile.caveman.filter(c => !c.weekend || isWeekend(date)); }
 function snsItems(date) { return S.profile.sns.filter(s => s.days.includes(dow(date))); }
@@ -160,10 +169,12 @@ async function loadDate(date) {
   if (S.home && S.day) S.home.map[S.date] = S.day;
   S.date = date;
   const ws = weekStart(date);
-  const [day, prev, week, nextWeek, runs] = await Promise.all([
+  S.monthKey = date.slice(0, 7);
+  const [day, prev, week, nextWeek, runs, , , month] = await Promise.all([
     db.getDay(date), db.getDay(addDays(date, -1)), db.getWeek(ws), db.getWeek(addDays(ws, 7)),
-    db.runningFor(ws, addDays(ws, 6)), loadReading(date), loadEvents(),
+    db.runningFor(ws, addDays(ws, 6)), loadReading(date), loadEvents(), db.getMonth(date.slice(0, 7)).catch(() => null),
   ]);
+  S.month = normMonth(month);
   S.day = normDay(day, date);
   if (day && syncWork(S.day, date)) markDirty('day');
   S.prev = prev;
@@ -437,6 +448,8 @@ function pdsBoard() {
     { text: `이번 주 3대 영역 목표 (${goalsN}/3)`, done: goalsN >= 3, tab: 'plan' },
     lesson && { text: `어제의 Try 반영: ${lesson}`, done: d.tasks.some(t => t.text === lesson), tab: 'plan' },
     noBook && { text: `독서 트랙 책 정하기 (${4 - noBook}/4)`, done: false, tab: 'plan' },
+    ...(() => { const wDone = !!(S.week.theme?.trim() || S.week.priorities.length); return (!wDone || dow(S.date) === 1) ? [{ text: '주간 계획 세우기 (테마·우선순위)', done: wDone, tab: 'plan', pv: 'week' }] : []; })(),
+    ...(() => { const mDone = !!(S.month.theme?.trim() || S.month.krs.length || Object.values(S.month.goals).some(v => v?.trim())); return (!mDone || Number(S.date.slice(8)) <= 3) ? [{ text: '월간 계획 세우기 (목표·핵심 결과)', done: mDone, tab: 'plan', pv: 'month' }] : []; })(),
   ].filter(Boolean);
   const pastOpen = d.blocks.filter(b => (!isToday || toMin(b.end) <= m) && !b.status).length;
   const caveTouched = Object.keys(d.caveman).length > 0;
@@ -449,7 +462,7 @@ function pdsBoard() {
     dow(S.date) === 0 && { text: '주간 리뷰 + 다음 주 목표', done: !!(S.week.review?.good || S.week.review?.change), tab: 'see', see: 'week' },
     ...dues.map(r => ({ text: `📖 독서 복습 ${r.stage}: ${r.title}${r.due_date < S.date ? ' (밀림)' : ''}`, done: false, url: rUrl })),
   ].filter(Boolean);
-  const autoLi = it => `<li class="auto ${it.done ? 'done' : ''}" ${it.url ? `data-act="openurl" data-url="${esc(it.url)}"` : `data-act="gotab" data-tab="${it.tab}" data-see="${it.see || ''}"`}>
+  const autoLi = it => `<li class="auto ${it.done ? 'done' : ''}" ${it.url ? `data-act="openurl" data-url="${esc(it.url)}"` : `data-act="gotab" data-tab="${it.tab}" data-see="${it.see || ''}" data-pv="${it.pv || ''}"`}>
       <span class="chk ${it.done ? 'on' : ''}">${it.done ? '✓' : ''}</span><span class="grow">${esc(it.text)}</span><span class="go">›</span></li>`;
   const taskLi = (t, i) => `<li class="swipe ${t.done ? 'done' : ''}" draggable="true" data-drag="${i}"><div class="swc"><span class="grip" title="끌어서 다른 칸으로">⋮⋮</span><label><input type="checkbox" data-act="toggletask" data-i="${i}" ${t.done ? 'checked' : ''} />
       ${areaDot(t.area)}<span class="grow">${esc(t.text)}</span></label><button class="icon" data-act="taskphase" data-i="${i}" title="다음 칸으로 (P→D→S)">⇄</button><button class="icon hide-touch" data-act="deltask" data-i="${i}" title="삭제">✕</button></div><button class="swdel" data-act="deltask" data-i="${i}">삭제</button></li>`;
@@ -537,12 +550,205 @@ function readingStatusLine() {
 const bookOpts = sel => `<option value="">직접 입력</option>` + (S.reading?.books || []).filter(b => b.status !== 'done' || b.id === sel)
   .map(b => `<option value="${b.id}" ${b.id === sel ? 'selected' : ''}>${esc(b.title)}${b.status === 'want' ? ' (읽을 책)' : b.status === 'done' ? ' (완독)' : ''}</option>`).join('');
 
+/* ================= PLAN: 주간·월간 계획 ================= */
+const RESTRE = /휴식|rest/i;
+function progBar(actual, target, unit = '') {
+  const a = Math.round((Number(actual) || 0) * 10) / 10; const t = Number(target) || 0;
+  const p = t ? Math.min(1, a / t) : 0;
+  return `<div class="bar sm grow"><i style="width:${p * 100}%;background:${p >= 1 ? '#16a34a' : 'var(--accent)'}"></i></div><b class="tgv">${a}${t ? '/' + t : ''}${unit}</b>`;
+}
+function tgtRow(scope, key, label, unit, actual, ph) {
+  const v = S[scope].targets[key];
+  return `<div class="tgt"><span class="tgl">${label}</span>
+    <input type="number" min="0" inputmode="decimal" class="w5" data-bind="${scope}.targets.${key}" value="${v || ''}" placeholder="${ph}" aria-label="${label} 목표" />
+    ${progBar(actual, v || ph, unit)}</div>`;
+}
+async function loadPlanData(key) {
+  if (S.pwLoading === key) return; S.pwLoading = key;
+  try {
+    if (key.startsWith('w')) {
+      const ws = key.slice(1); const rows = await db.listDays(ws, addDays(ws, 6));
+      S.pw = { key, rows };
+    } else {
+      const { first, last } = monthBounds(key.slice(1) + '-01');
+      const [rows, runs, weeks] = await Promise.all([db.listDays(first, last), db.runningFor(first, last), db.listWeeks(weekStart(first), last)]);
+      S.pw = { key, rows, runs, weeks };
+    }
+  } catch (e) { S.pw = { key, rows: [], runs: [], weeks: [], err: e.message || String(e) }; }
+  S.pwLoading = null;
+  const a = document.activeElement;
+  if (S.tab === 'plan' && !S.modal && !(a && ['INPUT', 'TEXTAREA'].includes(a.tagName))) render();
+}
+function listEditor(scope, listKey, items, { addId, areaId, ph, toAct, toLabel, delAct }) {
+  return `<ul class="tasks plist">${items.map((it, i) => `<li class="swipe ${it.done ? 'done' : ''}"><div class="swc">
+      <label><input type="checkbox" data-bind="${scope}.${listKey}.${i}.done" ${it.done ? 'checked' : ''} /> ${areaDot(it.area)} <span>${esc(it.text)}</span></label>
+      <span class="taskbtns">${toAct ? `<button class="icon" data-act="${toAct}" data-i="${i}" title="${toLabel}">↳</button>` : ''}<button class="icon hide-touch" data-act="${delAct}" data-i="${i}" title="삭제">✕</button></span>
+    </div><button class="swdel" data-act="${delAct}" data-i="${i}">삭제</button></li>`).join('')}</ul>
+    <div class="row"><select id="${areaId}" class="areasel">${areaOpts('biz')}</select><input id="${addId}" list="ac-titles" placeholder="${ph}" /><button data-act="${addId === 'wp-new' ? 'wpadd' : 'kradd'}">추가</button></div>`;
+}
+function planWeek() {
+  const w = S.week; const ws = weekStart(S.date); const we = addDays(ws, 6);
+  const days = [...Array(7)].map((_, i) => addDays(ws, i));
+  const key = 'w' + ws; const pw = S.pw?.key === key ? S.pw : null; if (!pw) loadPlanData(key);
+  const map = Object.fromEntries((pw?.rows || []).map(r => [r.date, r.data])); map[S.date] = S.day;
+  const train = S.runs.filter(r => !RESTRE.test(r.type + r.title));
+  const done = train.filter(r => r.status === 'done');
+  const km = sum(done.map(r => r.actual_distance ?? r.planned_distance)); const planKm = sum(train.map(r => r.planned_distance));
+  const snsSum = k => sum(days.map(dt => map[dt]?.sns?.[k]));
+  const reviews = days.filter(dt => map[dt]?.review?.at).length;
+  const wkEv = S.events.filter(e => e.date >= ws && e.date <= we).sort(evSort);
+  const thisWeek = ws === weekStart(today());
+  return `
+  <section class="card">
+    <div class="calhead"><button class="icon" data-act="weeknav" data-n="-1" aria-label="지난 주">‹</button>
+      <h2>🗓 주간 계획 <small>${fmtDate(ws)} ~ ${fmtDate(we)}${thisWeek ? ' · 이번 주' : ''}</small></h2>
+      <button class="icon" data-act="weeknav" data-n="1" aria-label="다음 주">›</button></div>
+    ${S.month.theme ? `<p class="muted small">이번 달 테마: <b>${esc(S.month.theme)}</b></p>` : ''}
+    <label class="lbl">이번 주 테마 (한 줄)</label>
+    <input data-bind="week.theme" value="${esc(w.theme)}" placeholder="예: 대회 테이퍼 + 전자책 상세페이지 마무리" />
+  </section>
+
+  <section class="card">
+    <h3>🎯 3대 영역 목표 <small>달성하면 체크</small></h3>
+    ${['run', 'read', 'biz'].map(a => `<div class="row">
+      <input type="checkbox" data-bind="week.goalsDone.${a}" ${w.goalsDone[a] ? 'checked' : ''} aria-label="${AREAS[a].label} 목표 달성" />
+      ${areaDot(a)}<b class="w4">${AREAS[a].label}</b>
+      <input data-bind="week.goals.${a}" value="${esc(w.goals[a])}" placeholder="이번 주 ${AREAS[a].label} 목표" class="${w.goalsDone[a] ? 'struck' : ''}" /></div>`).join('')}
+  </section>
+
+  <section class="card">
+    <h3>⭐ 이번 주 우선순위 <small>3~5개 권장 · ↳ 누르면 ${fmtDate(S.date)} 할 일로</small></h3>
+    ${listEditor('week', 'priorities', w.priorities, { addId: 'wp-new', areaId: 'wp-area', ph: '우선순위 입력 후 Enter', toAct: 'wp2task', toLabel: '오늘 할 일로', delAct: 'wpdel' })}
+  </section>
+
+  <section class="card">
+    <h3>📅 요일별 포커스 <small>날짜를 누르면 그날 하루 계획으로</small></h3>
+    ${days.map(dt => {
+      const r = S.runs.filter(x => x.date === dt && !RESTRE.test(x.type + x.title));
+      const ev = S.events.filter(e => e.date === dt).length;
+      return `<div class="dayrow ${dt === today() ? 'today' : ''}">
+        <button class="dlabel" data-act="dayopen" data-d="${dt}"><b>${DOW[dow(dt)]}</b><span>${Number(dt.slice(8))}</span></button>
+        <div class="grow">
+          <div class="dmeta">${workMode(dt) === 'work' ? '<span class="pill work">근무</span>' : '<span class="pill off">휴무</span>'}
+            ${r.map(x => `<span class="pill">🏃 ${esc(x.title)}${x.planned_distance ? ' ' + x.planned_distance + 'km' : ''}</span>`).join('')}
+            ${ev ? `<span class="pill">📌 ${ev}</span>` : ''}</div>
+          <input data-bind="week.focus.${dt}" value="${esc(w.focus[dt] || '')}" placeholder="이날 포커스 한 줄" />
+        </div></div>`;
+    }).join('')}
+  </section>
+
+  <section class="card">
+    <h3>📊 주간 목표 수치 <small>입력한 목표 대비 실제 (빈칸은 기본값)</small></h3>
+    ${tgtRow('week', 'runKm', '🏃 런닝 거리', 'km', km, Math.round(planKm) || 40)}
+    ${tgtRow('week', 'runCount', '🏃 런닝 횟수', '회', done.length, train.length || 4)}
+    ${tgtRow('week', 'readMin', '📚 독서 시간', '분', readMinutes(ws, we), 420)}
+    ${tgtRow('week', 'threads', '📣 스레드 글', '개', snsSum('th_post'), 49)}
+    ${tgtRow('week', 'insta', '📣 인스타 포스팅', '건', snsSum('ig_post'), 3)}
+    ${tgtRow('week', 'reviews', '✍️ 하루 리뷰', '일', reviews, 7)}
+    ${pw ? '' : '<p class="muted small">실제 기록 불러오는 중…</p>'}
+  </section>
+
+  <section class="card">
+    <div class="ahead"><h3>📌 이번 주 일정 ${wkEv.length ? `<small>${wkEv.length}개</small>` : ''}</h3><button class="sm" data-act="evnew" data-d="${S.date}">+ 일정</button></div>
+    ${evList(wkEv, { withDate: true, empty: '이번 주 일정이 없어요.' })}
+  </section>
+
+  <section class="card">
+    <h3>📝 메모</h3>
+    <textarea data-bind="week.notes" rows="3" placeholder="이번 주 주의할 점, 지난주 리뷰에서 가져올 것">${esc(w.notes)}</textarea>
+    ${w.review?.change ? `<p class="muted small">지난 주말 리뷰에서: ${esc(w.review.change)}</p>` : ''}
+  </section>`;
+}
+function planMonth() {
+  const m = S.month; const { first, last } = monthBounds(S.date); const mk = first.slice(0, 7);
+  const key = 'm' + mk; const pw = S.pw?.key === key ? S.pw : null; if (!pw) loadPlanData(key);
+  const rows = pw?.rows || []; const map = Object.fromEntries(rows.map(r => [r.date, r.data])); map[S.date] = S.day;
+  const runs = pw?.runs || [];
+  const done = runs.filter(r => r.status === 'done' && !RESTRE.test(r.type + r.title));
+  const km = sum(done.map(r => r.actual_distance ?? r.planned_distance));
+  const planKm = sum(runs.filter(r => !RESTRE.test(r.type + r.title)).map(r => r.planned_distance));
+  const dates = []; for (let dt = first; dt <= last; dt = addDays(dt, 1)) dates.push(dt);
+  const snsSum = k => sum(dates.map(dt => map[dt]?.sns?.[k]));
+  const reviews = dates.filter(dt => map[dt]?.review?.at).length;
+  const mEv = S.events.filter(e => e.date >= first && e.date <= last).sort(evSort);
+  const race = S.race && S.race.date >= first && S.race.date <= last ? S.race : null;
+  // 이 달에 걸친 주(월요일 시작)
+  const mondays = []; for (let d = weekStart(first); d <= last; d = addDays(d, 7)) mondays.push(d);
+  const wmap = Object.fromEntries((pw?.weeks || []).map(x => [x.week_start, normWeek(x.data)]));
+  wmap[weekStart(S.date)] = S.week;
+  const ym = parse(first);
+  return `
+  <section class="card">
+    <div class="calhead"><button class="icon" data-act="monthnav2" data-n="-1" aria-label="지난 달">‹</button>
+      <h2>📆 ${ym.getFullYear()}년 ${ym.getMonth() + 1}월 계획</h2>
+      <button class="icon" data-act="monthnav2" data-n="1" aria-label="다음 달">›</button></div>
+    <label class="lbl">이번 달 테마 (한 줄)</label>
+    <input data-bind="month.theme" value="${esc(m.theme)}" placeholder="예: 풀코스 두 번 완주 + 부자의 서재 11기 운영" />
+    <label class="lbl">🔥 이달의 몰입 주제 <small>원시인 ⑮ 한 달 1주제</small></label>
+    <input data-bind="month.topic" value="${esc(m.topic)}" placeholder="예: 주식 공부 / 연금 공부 / 하프 서브 1:40" />
+  </section>
+
+  <section class="card">
+    <h3>🎯 영역별 월간 목표 <small>달성하면 체크</small></h3>
+    ${['run', 'read', 'biz', 'life'].map(a => `<div class="row">
+      <input type="checkbox" data-bind="month.goalsDone.${a}" ${m.goalsDone[a] ? 'checked' : ''} aria-label="${AREAS[a].label} 목표 달성" />
+      ${areaDot(a)}<b class="w4">${AREAS[a].label}</b>
+      <input data-bind="month.goals.${a}" value="${esc(m.goals[a])}" placeholder="${{ run: '예: 11/1 JTBC 3:30, 11/22 인천 회복런', read: '예: 7권 완독, 부자의 서재 11기 모집', biz: '예: 전자책 상세페이지 개선', life: '예: 가족 여행, 수면 22:30' }[a]}" class="${m.goalsDone[a] ? 'struck' : ''}" /></div>`).join('')}
+  </section>
+
+  <section class="card">
+    <h3>🏁 핵심 결과 <small>이번 달 끝내야 할 것 · ↳ 누르면 이번 주 우선순위로</small></h3>
+    ${listEditor('month', 'krs', m.krs, { addId: 'kr-new', areaId: 'kr-area', ph: '핵심 결과 입력 후 Enter', toAct: 'kr2week', toLabel: '이번 주 우선순위로', delAct: 'krdel' })}
+  </section>
+
+  <section class="card">
+    <h3>📊 월간 목표 수치 <small>입력한 목표 대비 실제</small></h3>
+    ${tgtRow('month', 'books', '📚 완독', '권', doneBooks(first, last).length, S.profile.monthlyBooks || 7)}
+    ${tgtRow('month', 'readMin', '📚 독서 시간', '분', readMinutes(first, last), 1800)}
+    ${tgtRow('month', 'runKm', '🏃 런닝 거리', 'km', km, Math.round(planKm) || 150)}
+    ${tgtRow('month', 'runCount', '🏃 런닝 횟수', '회', done.length, 16)}
+    ${tgtRow('month', 'threads', '📣 스레드 글', '개', snsSum('th_post'), 7 * dates.length)}
+    ${tgtRow('month', 'insta', '📣 인스타 포스팅', '건', snsSum('ig_post'), 13)}
+    ${tgtRow('month', 'reviews', '✍️ 하루 리뷰', '일', reviews, dates.length)}
+    ${pw ? '' : '<p class="muted small">실제 기록 불러오는 중…</p>'}
+  </section>
+
+  <section class="card">
+    <h3>🗓 주별 계획 한눈에 <small>누르면 그 주 주간 계획으로</small></h3>
+    ${mondays.map((mo, i) => { const wk = wmap[mo]; const pr = wk?.priorities || [];
+      return `<button class="weekrow ${mo === weekStart(today()) ? 'today' : ''}" data-act="weekopen" data-d="${mo < first ? first : mo}">
+        <b>${i + 1}주차</b><span class="muted small">${Number(mo.slice(5, 7))}/${Number(mo.slice(8))}~${Number(addDays(mo, 6).slice(5, 7))}/${Number(addDays(mo, 6).slice(8))}</span>
+        <span class="grow ellipsis">${wk?.theme ? esc(wk.theme) : '<span class="muted">테마 미정</span>'}</span>
+        <span class="muted small">${pr.length ? `우선 ${pr.filter(x => x.done).length}/${pr.length}` : ''}</span><span class="go">›</span></button>`; }).join('')}
+  </section>
+
+  <section class="card">
+    <div class="ahead"><h3>📌 이번 달 주요 일정 ${mEv.length ? `<small>${mEv.length}개</small>` : ''}</h3><button class="sm" data-act="evnew" data-d="${S.date}">+ 일정</button></div>
+    ${race ? `<p class="racel">🏁 <b>${esc(race.name)}</b> ${Number(race.date.slice(5, 7))}/${Number(race.date.slice(8))} · 목표 ${esc(race.goal)}</p>` : ''}
+    ${evList(mEv, { withDate: true, empty: '이번 달 일정이 없어요.' })}
+  </section>
+
+  <section class="card">
+    <h3>📝 메모</h3>
+    <textarea data-bind="month.notes" rows="3" placeholder="이번 달 돌아볼 것, 다음 달로 넘길 것">${esc(m.notes)}</textarea>
+  </section>`;
+}
+
 /* ================= PLAN ================= */
 function planView() {
+  const pv = S.planView || 'day';
+  const seg = `<div class="seg" role="tablist">${[['day', '하루'], ['week', '주간 계획'], ['month', '월간 계획']].map(([k, l]) => `<button role="tab" data-act="planview" data-v="${k}" class="${pv === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  if (pv === 'week') return seg + planWeek();
+  if (pv === 'month') return seg + planMonth();
+  return seg + planDay();
+}
+function planDay() {
   const d = S.day; const p = S.profile;
   const lesson = S.prev?.review?.change?.trim();
   const ws = weekStart(S.date);
+  const ctx = [S.month.theme && `이번 달 <b>${esc(S.month.theme)}</b>`, S.week.theme && `이번 주 <b>${esc(S.week.theme)}</b>`, S.week.focus[S.date] && `오늘 포커스 <b>${esc(S.week.focus[S.date])}</b>`].filter(Boolean);
   return `
+  ${ctx.length ? `<div class="ctxline">🧭 ${ctx.join(' · ')}</div>` : ''}
   <section class="card">
     <h2>📋 Plan · ${fmtDate(S.date)} ${isWeekend(S.date) ? '<span class="pill">주말</span>' : '<span class="pill">평일</span>'} ${workPill(S.date)}</h2>
     ${lesson ? `<div class="lesson"><div><small>어제 리뷰에서 정한 '내일 바꿀 1가지'</small><p>${esc(lesson)}</p></div>
@@ -567,7 +773,7 @@ function planView() {
   </section>
 
   <section class="card">
-    <h3>🗓 이번 주 목표 <small>${fmtDate(ws)} 주</small></h3>
+    <div class="ahead"><h3>🗓 이번 주 목표 <small>${fmtDate(ws)} 주</small></h3><button class="sm" data-act="planview" data-v="week">주간 계획 열기</button></div>
     ${['run', 'read', 'biz'].map(a => `
       <div class="row">${areaDot(a)}<b class="w4">${AREAS[a].label}</b>
         <input data-bind="week.goals.${a}" value="${esc(S.week.goals[a])}" placeholder="이번 주 ${AREAS[a].label} 목표" /></div>`).join('')}
@@ -925,6 +1131,11 @@ function seeMonth(first, last, rows, runs) {
   const caveAvg = (() => { const v = rows.map(r => score(r.data, r.date)?.cave?.p).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; })();
   return `<section class="card">
     <h2>📅 ${parse(first).getMonth() + 1}월 See</h2>
+    ${S.month && (S.month.theme || Object.values(S.month.goals).some(v => v?.trim()) || S.month.krs.length) ? `<div class="mgoals">
+      ${S.month.theme ? `<p>🧭 <b>${esc(S.month.theme)}</b></p>` : ''}
+      <ul class="facts">${['run', 'read', 'biz', 'life'].filter(a => S.month.goals[a]?.trim()).map(a => `<li>${S.month.goalsDone[a] ? '✅' : '⬜'} ${AREAS[a].label}: ${esc(S.month.goals[a])}</li>`).join('')}
+      ${S.month.krs.map(k => `<li>${k.done ? '✅' : '⬜'} ${esc(k.text)}</li>`).join('')}</ul>
+      <button class="sm" data-act="gotab" data-tab="plan" data-pv="month">월간 계획에서 체크하기</button></div>` : ''}
     <div class="kpis">
       <div><b>${pct(avg)}</b><span>평균 PDS</span></div>
       <div><b>${books.length}/${S.profile.monthlyBooks}</b><span>완독</span></div>
@@ -1627,6 +1838,8 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'newtask') { e.preventDefault(); act('addtask'); }
+  if (e.key === 'Enter' && e.target.id === 'wp-new') { e.preventDefault(); act('wpadd'); }
+  if (e.key === 'Enter' && e.target.id === 'kr-new') { e.preventDefault(); act('kradd'); }
   if (e.key === 'Enter' && e.target.id === 'rpw') { e.preventDefault(); act('readconnect'); }
   if (e.key === 'Enter' && e.target.dataset?.ph) { e.preventDefault(); act('addtaskph', { ph: e.target.dataset.ph }); }
   if (e.key === 'Enter' && e.target.id === 'bookadd') { e.preventDefault(); act('addbook'); }
@@ -1655,7 +1868,26 @@ async function act(a, ds = {}, el) {
     case 'goto': S.seeView = 'day'; await loadDate(ds.d); break;
     case 'pick': await loadDate(ds.d); break;
     case 'monthnav': { const x = parse(S.date.slice(0, 8) + '01'); x.setMonth(x.getMonth() + Number(ds.n)); const t = today(); await loadDate(ymd(x).slice(0, 7) === t.slice(0, 7) ? t : ymd(x)); break; }
-    case 'gotab': S.tab = ds.tab; if (ds.see) S.seeView = ds.see; render(); scrollTo(0, 0); break;
+    case 'gotab': S.tab = ds.tab; if (ds.see) S.seeView = ds.see; if (ds.pv) S.planView = ds.pv; render(); scrollTo(0, 0); break;
+    case 'planview': S.planView = ds.v; S.pw = null; render(); scrollTo(0, 0); break;
+    case 'weeknav': await loadDate(addDays(S.date, 7 * Number(ds.n))); break;
+    case 'monthnav2': { const x = parse(S.date.slice(0, 8) + '01'); x.setMonth(x.getMonth() + Number(ds.n)); const t = today(); await loadDate(ymd(x).slice(0, 7) === t.slice(0, 7) ? t : ymd(x)); break; }
+    case 'weekopen': S.planView = 'week'; S.pw = null; await loadDate(ds.d); scrollTo(0, 0); break;
+    case 'dayopen': S.planView = 'day'; await loadDate(ds.d); scrollTo(0, 0); break;
+    case 'wpadd': {
+      const t = $('#wp-new')?.value.trim(); if (!t) break;
+      S.week.priorities.push({ id: uid(), text: t, area: $('#wp-area')?.value || 'biz', done: false }); pushRecent(t);
+      markDirty('week'); render(); $('#wp-new')?.focus(); break;
+    }
+    case 'wpdel': S.week.priorities.splice(Number(ds.i), 1); markDirty('week'); render(); break;
+    case 'wp2task': { const w = S.week.priorities[ds.i]; d.tasks.push({ id: uid(), text: w.text, area: w.area, phase: 'do', done: false }); markDirty('day'); toast(`${fmtDate(S.date)} 할 일에 추가: ${w.text}`); render(); break; }
+    case 'kradd': {
+      const t = $('#kr-new')?.value.trim(); if (!t) break;
+      S.month.krs.push({ id: uid(), text: t, area: $('#kr-area')?.value || 'biz', done: false }); pushRecent(t);
+      markDirty('month'); render(); $('#kr-new')?.focus(); break;
+    }
+    case 'krdel': S.month.krs.splice(Number(ds.i), 1); markDirty('month'); render(); break;
+    case 'kr2week': { const k = S.month.krs[ds.i]; S.week.priorities.push({ id: uid(), text: k.text, area: k.area, done: false }); markDirty('week'); toast('이번 주 우선순위에 추가했어요'); render(); break; }
     case 'addtaskph': {
       const inp = document.querySelector(`.addph[data-ph="${ds.ph}"]`); const t = inp?.value.trim(); if (!t) break;
       d.tasks.push({ id: uid(), text: t, area: ds.ph === 'do' ? 'biz' : ds.ph === 'see' ? 'review' : 'life', phase: ds.ph, done: false }); pushRecent(t);
