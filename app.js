@@ -1327,14 +1327,17 @@ function timelineItems() {
 function openEvent(ev, date) {
   if (!ev && ev !== null) return;
   const n = S.profile.notify;
-  S.modal = { type: 'event', ev: ev ? { ...ev } : { id: null, date: date || S.date, start_time: null, end_time: null, title: '', area: 'life', memo: '', remind: n.eventDefault || 'none', done: false } };
+  // 새 일정은 '시간 지정'으로 시작(다음 정각 ~ 1시간), 기존 일정은 시작 시간이 없으면 종일
+  const nh = Math.min(22, new Date().getHours() + 1);
+  S.modal = { type: 'event', allDay: ev ? !ev.start_time : false, ev: ev ? { ...ev } : { id: null, date: date || S.date, start_time: `${pad(nh)}:00`, end_time: `${pad(nh + 1)}:00`, title: '', area: 'life', memo: '', remind: n.eventDefault || 'none', done: false } };
   render(); setTimeout(() => $('#ev-title')?.focus(), 30);
 }
 function readEvForm() {
   if (S.modal?.type !== 'event' || !$('#ev-title')) return;
   const e = S.modal.ev;
-  Object.assign(e, { title: $('#ev-title').value, date: $('#ev-date').value, start_time: $('#ev-start').value || null, end_time: $('#ev-end').value || null,
-    area: $('#ev-area').value, remind: $('#ev-remind').value, memo: $('#ev-memo').value });
+  Object.assign(e, { title: $('#ev-title').value, date: $('#ev-date').value, remind: $('#ev-remind').value, memo: $('#ev-memo').value });
+  if (S.modal.allDay) { e.start_time = null; e.end_time = null; }
+  else if ($('#ev-start')) { e.start_time = $('#ev-start').value || null; e.end_time = $('#ev-end').value || null; }
   if ($('#ev-done')) e.done = $('#ev-done').checked;
 }
 function remindText(ev) {
@@ -1350,14 +1353,24 @@ function modalView() {
   const e = m.ev;
   return `<div class="modal" data-act="modalbg"><div class="mbox" role="dialog" aria-modal="true" aria-label="${e.id ? '일정 수정' : '일정 추가'}">
     <div class="ahead"><h3>${e.id ? '✎ 일정 수정' : '📌 일정 추가'}</h3><button class="icon" data-act="modalclose" aria-label="닫기">✕</button></div>
+    <div class="evform">
     <label class="lbl" for="ev-title">제목</label>
     <input id="ev-title" list="ac-titles" autocomplete="off" value="${esc(e.title)}" placeholder="예: 치과 예약, 북클럽 모임, 전자책 마감" maxlength="120" />
-    <div class="g2">
-      <div><label class="lbl" for="ev-date">날짜</label><input type="date" id="ev-date" value="${esc(e.date)}" /></div>
-      <div><label class="lbl" for="ev-area">영역</label><select id="ev-area">${areaOpts(e.area)}</select></div>
-      <div><label class="lbl" for="ev-start">시작 <small>(비우면 종일)</small></label><input type="time" id="ev-start" value="${e.start_time || ''}" /></div>
-      <div><label class="lbl" for="ev-end">끝 <small>(선택)</small></label><input type="time" id="ev-end" value="${e.end_time || ''}" /></div>
+    <label class="lbl" for="ev-date">날짜</label>
+    <input type="date" id="ev-date" value="${esc(e.date)}" />
+    <label class="lbl">시간</label>
+    <div class="seg evseg" role="tablist">
+      <button role="tab" data-act="evallday" data-v="1" class="${m.allDay ? 'on' : ''}" aria-selected="${!!m.allDay}">🌅 종일</button>
+      <button role="tab" data-act="evallday" data-v="0" class="${m.allDay ? '' : 'on'}" aria-selected="${!m.allDay}">⏰ 시간 지정</button>
     </div>
+    ${m.allDay ? `<p class="muted small evnote">하루 종일 일정이에요. 알림은 종일 기준 시각(${esc(S.profile.notify?.allDayTime || '09:00')})에 맞춰 와요.</p>`
+      : `<div class="evtimes">
+        <div><label class="lbl" for="ev-start">시작</label><input type="time" id="ev-start" value="${e.start_time || ''}" /></div>
+        <span class="evdash">~</span>
+        <div><label class="lbl" for="ev-end">끝 <small>(선택)</small></label><input type="time" id="ev-end" value="${e.end_time || ''}" /></div>
+      </div>`}
+    <label class="lbl">영역</label>
+    <div class="fchips evareas">${Object.entries(AREAS).map(([k, v]) => `<button class="fchip ${e.area === k ? 'on' : ''}" data-act="evarea" data-v="${k}">${areaDot(k)} ${v.label}</button>`).join('')}</div>
     <label class="lbl" for="ev-remind">알림</label>
     <select id="ev-remind">${remOpts(e.remind)}</select>
     <p class="muted small" id="ev-hint">${remindText(e)}</p>
@@ -1365,16 +1378,18 @@ function modalView() {
     <textarea id="ev-memo" rows="2" placeholder="장소, 준비물 등">${esc(e.memo)}</textarea>
     ${e.id ? `<label class="goalchk"><input type="checkbox" id="ev-done" ${e.done ? 'checked' : ''} /> 완료한 일정</label>` : ''}
     ${m.msg ? `<p class="warn small">${esc(m.msg)}</p>` : ''}
-    <div class="btnrow">
-      <button class="primary" data-act="evsave">${e.id ? '저장' : '추가'}</button>
-      <button data-act="modalclose">취소</button>
-      ${e.id ? (m.confirmDel ? `<button class="danger" data-act="evdelok">정말 삭제</button>` : `<button class="ghost" data-act="evdel">삭제</button>`) : ''}
     </div>
+    <div class="evbtns">
+      <button data-act="modalclose">취소</button>
+      <button class="primary" data-act="evsave">${e.id ? '저장' : '추가'}</button>
+    </div>
+    ${e.id ? `<div class="evdelrow">${m.confirmDel ? `<span class="small">이 일정을 삭제할까요?</span><button class="danger" data-act="evdelok">정말 삭제</button>` : `<button class="linkish" data-act="evdel">🗑 일정 삭제</button>`}</div>` : ''}
   </div></div>`;
 }
 async function saveEventForm() {
   readEvForm(); const m = S.modal; if (!m || m.busy) return; const e = m.ev;
   const err = !e.title.trim() ? '제목을 입력하세요' : !e.date ? '날짜를 고르세요'
+    : !m.allDay && !e.start_time ? '시작 시간을 입력하거나 ‘종일’을 고르세요'
     : e.end_time && !e.start_time ? '끝 시간만 넣을 수는 없어요 (시작 시간도 입력)'
     : e.start_time && e.end_time && e.end_time < e.start_time ? '끝 시간이 시작보다 빨라요' : '';
   if (err) { m.msg = err; render(); return; }
@@ -1982,6 +1997,13 @@ async function act(a, ds = {}, el) {
     case 'evtoggle': { const e = S.events.find(x => x.id === ds.id); if (e) await setEventDone(e.id, !e.done); break; }
     case 'modalclose': case 'modalbg': S.modal = null; render(); break;
     case 'evdelq': await quickDeleteEvent(ds.id); break;
+    case 'evallday': {
+      readEvForm(); const m = S.modal; const e = m.ev; m.allDay = ds.v === '1'; m.msg = '';
+      if (m.allDay) { m.savedTimes = [e.start_time, e.end_time]; e.start_time = null; e.end_time = null; }
+      else { const [s, en] = m.savedTimes || []; const nh = Math.min(22, new Date().getHours() + 1); e.start_time = s || `${pad(nh)}:00`; e.end_time = en || `${pad(nh + 1)}:00`; }
+      render(); break;
+    }
+    case 'evarea': readEvForm(); S.modal.ev.area = ds.v; render(); break;
     // UI 패턴
     case 'sheet': S.modal = { type: 'sheet' }; render(); break;
     case 'sheetpick':

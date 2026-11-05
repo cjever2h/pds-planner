@@ -415,3 +415,26 @@ input.struck { text-decoration: line-through; color: var(--muted); }
 .mgoals { background: var(--bg); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; }
 .mgoals p { margin: 0 0 4px; }
 @media (max-width: 520px) { .tgt .tgl { width: 92px; font-size: 13px; } .tgt .tgv { min-width: 62px; } }
+
+/* ===== 일정 추가 창 (모바일 겹침 수정 + 종일/시간 지정) ===== */
+.mbox { overflow-x: hidden; }
+.evform { display: block; }
+.evform input, .evform select, .evform textarea { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; font-size: 16px; }
+.evform input[type=date], .evform input[type=time] { -webkit-appearance: none; appearance: none; display: block; min-height: 44px; width: 100%; flex: none; padding: 8px 10px; text-align: left; background: var(--bg); }
+.evform input[type=date]::-webkit-date-and-time-value, .evform input[type=time]::-webkit-date-and-time-value { text-align: left; }
+.evseg { margin: 0; }
+.evseg button { padding: 9px 4px; font-size: 14px; font-weight: 600; }
+.evnote { margin: 6px 2px 0; }
+.evtimes { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 0 8px; align-items: end; margin-top: 2px; }
+.evtimes .evdash { padding-bottom: 12px; color: var(--muted); }
+.evareas { margin: 0; }
+.evareas .fchip { padding: 6px 11px; }
+.evbtns { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-top: 14px; }
+.evbtns button { min-height: 46px; font-size: 15px; width: 100%; }
+.evdelrow { display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 10px; }
+.evdelrow .danger { min-height: 40px; }
+button.linkish { border: none; background: transparent; color: #dc2626; font-size: 14px; padding: 6px 10px; }
+@media (max-width: 700px) {
+  .mbox { max-height: 92dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .evbtns { position: sticky; bottom: 0; z-index: 2; background: var(--card); padding: 10px 0 4px; border-top: 1px solid var(--line); }
+}
