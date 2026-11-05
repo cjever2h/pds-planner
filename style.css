@@ -438,3 +438,8 @@ button.linkish { border: none; background: transparent; color: #dc2626; font-siz
   .mbox { max-height: 92dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .evbtns { position: sticky; bottom: 0; z-index: 2; background: var(--card); padding: 10px 0 4px; border-top: 1px solid var(--line); }
 }
+/* 좁은 화면에서 달력이 가로로 넘치지 않게 */
+.mgrid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+@media (max-width: 960px) { .dash { grid-template-columns: minmax(0, 1fr); } }
+.calcard, .areas, .dash > * { min-width: 0; }
+.mday { min-width: 0; overflow: hidden; }
